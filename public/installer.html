@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111214" />
+    <title>Setup • Teralth Studio</title>
+    <link rel="stylesheet" href="/installer.css" />
+    <script src="/installer.js" defer></script>
+  </head>
+  <body>
+    <main class="installer-shell">
+      <header class="installer-top">
+        <div class="brand"><span class="brand-icon" aria-hidden="true">T</span><strong>Teralth Studio</strong></div>
+        <button id="languageToggle" class="language-toggle" type="button" aria-label="Change language">ES</button>
+      </header>
+      <div class="installer-grid">
+        <nav class="setup-aside" aria-label="Setup steps">
+          <button class="aside-step" type="button" data-step="0"><span class="step-indicator"></span><strong data-es="Base de datos" data-en="Database">Database</strong></button>
+          <button class="aside-step" type="button" data-step="1"><span class="step-indicator"></span><strong>SMTP</strong></button>
+          <button class="aside-step" type="button" data-step="2"><span class="step-indicator"></span><strong data-es="Sitio web" data-en="Website">Website</strong></button>
+          <button class="aside-step" type="button" data-step="3"><span class="step-indicator"></span><strong data-es="Administrador" data-en="Administrator">Administrator</strong></button>
+          <button class="aside-step" type="button" data-step="4"><span class="step-indicator"></span><strong data-es="Instalación" data-en="Installation">Installation</strong></button>
+        </nav>
+        <form id="setupForm" class="setup-form" novalidate>
+          <section class="setup-page" data-page="0">
+            <div class="form-heading"><h1 data-es="Base de datos" data-en="Database">Database</h1><p data-es="Conecta la base de datos MySQL asignada a tu servidor." data-en="Connect the MySQL database assigned to your server.">Connect the MySQL database assigned to your server.</p></div>
+            <div class="setup-code">
+              <label for="setupCode" data-es="Código de instalación" data-en="Setup code">Setup code</label>
+              <input id="setupCode" autocomplete="one-time-code" required />
+              <small data-es="Encontrarás setup.key en los archivos del servidor." data-en="Find setup.key in your server's files.">Find setup.key in your server's files.</small>
+            </div>
+            <div class="field-grid">
+              <label><span data-es="Host MySQL" data-en="MySQL host">MySQL host</span><input id="dbHost" autocomplete="off" required placeholder="db.example.net" /></label>
+              <label><span data-es="Puerto" data-en="Port">Port</span><input id="dbPort" type="number" min="1" max="65535" value="3306" required /></label>
+              <label><span data-es="Nombre de la base de datos" data-en="Database name">Database name</span><input id="dbName" autocomplete="off" required /></label>
+              <label><span data-es="Usuario MySQL" data-en="MySQL username">MySQL username</span><input id="dbUser" autocomplete="username" required /></label>
+              <label class="wide"><span data-es="Contraseña MySQL" data-en="MySQL password">MySQL password</span><input id="dbPassword" type="password" autocomplete="new-password" required /></label>
+            </div>
+            <label class="check-row"><input id="dbSsl" type="checkbox" /><span data-es="Exigir SSL/TLS para MySQL" data-en="Require SSL/TLS for MySQL">Require SSL/TLS for MySQL</span></label>
+            <button id="testDatabase" class="button-secondary" type="button" data-es="Verificar conexión" data-en="Verify connection">Verify connection</button>
+            <div id="dbMessage" class="inline-message" role="status" hidden></div>
+            <div class="form-actions"><button id="nextDatabase" class="button-primary" type="button" disabled data-es="Continuar" data-en="Continue">Continue</button></div>
+          </section>
+          <section class="setup-page" data-page="1" hidden>
+            <div class="form-heading"><h1 data-es="Correo SMTP" data-en="SMTP email">SMTP email</h1><p data-es="Verifica la conexión enviando un correo de prueba real." data-en="Verify the connection by sending a real test email.">Verify the connection by sending a real test email.</p></div>
+            <div class="field-grid">
+              <label><span data-es="Host SMTP" data-en="SMTP host">SMTP host</span><input id="smtpHost" placeholder="smtp.example.com" required /></label>
+              <label><span data-es="Puerto SMTP" data-en="SMTP port">SMTP port</span><input id="smtpPort" type="number" min="1" max="65535" value="587" required /></label>
+              <label><span data-es="Usuario SMTP" data-en="SMTP username">SMTP username</span><input id="smtpUser" autocomplete="username" /></label>
+              <label><span data-es="Contraseña SMTP" data-en="SMTP password">SMTP password</span><input id="smtpPassword" type="password" autocomplete="new-password" /></label>
+              <label class="wide"><span data-es="Remitente" data-en="Sender">Sender</span><input id="smtpFrom" placeholder="Teralth Studio &lt;no-reply@example.com&gt;" required /></label>
+              <label class="wide"><span data-es="Correo de prueba" data-en="Test email recipient">Test email recipient</span><input id="smtpTestEmail" type="email" autocomplete="email" required placeholder="you@example.com" /></label>
+            </div>
+            <label class="check-row"><input id="smtpSecure" type="checkbox" /><span data-es="Conexión SMTP segura (puerto 465)" data-en="Secure SMTP connection (port 465)">Secure SMTP connection (port 465)</span></label>
+            <button id="testSmtp" class="button-secondary" type="button" data-es="Verificar conexión" data-en="Verify connection">Verify connection</button>
+            <div id="smtpMessage" class="inline-message" role="status" hidden></div>
+            <div class="form-actions"><button class="button-secondary back" type="button" data-es="Atrás" data-en="Back">Back</button><button id="nextSmtp" class="button-primary" type="button" disabled data-es="Continuar" data-en="Continue">Continue</button></div>
+          </section>
+          <section class="setup-page" data-page="2" hidden>
+            <div class="form-heading"><h1 data-es="Sitio web" data-en="Website">Website</h1><p data-es="Define la identidad y la dirección de tu wiki. Puedes cambiarlas después." data-en="Set your wiki's identity and address. You can change them later.">Set your wiki's identity and address. You can change them later.</p></div>
+            <section class="setup-group">
+              <h2 data-es="Datos del sitio" data-en="Site details">Site details</h2>
+              <div class="field-grid">
+              <label class="wide"><span data-es="Nombre del sitio" data-en="Site name">Site name</span><input id="siteName" value="Teralth Studio" maxlength="120" required /></label>
+              </div>
+            </section>
+            <section class="setup-group">
+              <h2 data-es="Identidad visual" data-en="Visual identity">Visual identity</h2>
+              <div class="field-grid">
+              <label><span data-es="Logotipo (opcional)" data-en="Logo (optional)">Logo (optional)</span><input id="siteLogo" type="file" accept="image/png,image/jpeg,image/gif,image/webp" /><small data-es="PNG, JPEG, GIF o WebP; máximo 2 MB." data-en="PNG, JPEG, GIF or WebP; maximum 2 MB.">PNG, JPEG, GIF or WebP; maximum 2 MB.</small></label>
+              <label><span data-es="Favicon (opcional)" data-en="Favicon (optional)">Favicon (optional)</span><input id="siteFavicon" type="file" accept="image/png,image/jpeg,image/gif,image/webp" /><small data-es="PNG, JPEG, GIF o WebP; máximo 2 MB." data-en="PNG, JPEG, GIF or WebP; maximum 2 MB.">PNG, JPEG, GIF or WebP; maximum 2 MB.</small></label>
+              </div>
+            </section>
+            <section class="setup-group">
+              <h2 data-es="Dirección y servidor" data-en="Address and server">Address and server</h2>
+              <div class="field-grid">
+              <label class="wide"><span data-es="URL pública" data-en="Public URL">Public URL</span><input id="baseUrl" type="url" required placeholder="https://docs.example.com" /></label>
+              <label><span data-es="Entorno" data-en="Environment">Environment</span><select id="nodeEnv"><option value="development">Development</option><option value="production">Production</option></select></label>
+              <label><span data-es="Host de escucha" data-en="Listen host">Listen host</span><input id="appHost" value="0.0.0.0" required /></label>
+              <label><span data-es="Puerto de la app" data-en="App port">App port</span><input id="appPort" type="number" min="1" max="65535" value="3000" required /></label>
+            </div>
+            <p class="field-note" data-es="En Pterodactyl, usa 0.0.0.0 como host de escucha. En producción, la URL debe usar HTTPS." data-en="On Pterodactyl, use 0.0.0.0 as the listen host. In production, the URL must use HTTPS.">On Pterodactyl, use 0.0.0.0 as the listen host. In production, the URL must use HTTPS.</p>
+            </section>
+            <div id="websiteMessage" class="inline-message bad" role="alert" hidden></div>
+            <div class="form-actions"><button class="button-secondary back" type="button" data-es="Atrás" data-en="Back">Back</button><button id="nextWebsite" class="button-primary" type="button" data-es="Continuar" data-en="Continue">Continue</button></div>
+          </section>
+          <section class="setup-page" data-page="3" hidden>
+            <div class="form-heading"><h1 data-es="Administrador" data-en="Administrator">Administrator</h1><p data-es="Crea la cuenta principal. Deberá cambiar la contraseña en el primer acceso." data-en="Create the primary account. Its password must be changed on first sign-in.">Create the primary account. Its password must be changed on first sign-in.</p></div>
+            <div class="field-grid">
+              <label><span data-es="Usuario administrador" data-en="Administrator username">Administrator username</span><input id="adminUsername" minlength="2" maxlength="60" autocomplete="username" required /></label>
+              <label><span data-es="Correo administrador" data-en="Administrator email">Administrator email</span><input id="adminEmail" type="email" autocomplete="email" required /></label>
+              <label class="wide"><span data-es="Contraseña inicial" data-en="Initial password">Initial password</span><div class="password-control"><input id="adminPassword" type="password" autocomplete="new-password" required /><button id="generatePassword" type="button" data-es="Generar" data-en="Generate">Generate</button></div></label>
+              <label class="wide"><span data-es="Repetir contraseña" data-en="Repeat password">Repeat password</span><input id="adminPasswordConfirm" type="password" autocomplete="new-password" required /></label>
+            </div>
+            <div class="checklist" aria-live="polite">
+              <span data-check="length" data-es="Mínimo 16 caracteres y máximo 72 bytes" data-en="At least 16 characters, at most 72 bytes">At least 16 characters, at most 72 bytes</span>
+              <span data-check="upper" data-es="Una mayúscula" data-en="An uppercase letter">An uppercase letter</span>
+              <span data-check="lower" data-es="Una minúscula" data-en="A lowercase letter">A lowercase letter</span>
+              <span data-check="number" data-es="Un número" data-en="A number">A number</span>
+              <span data-check="special" data-es="Un símbolo" data-en="A symbol">A symbol</span>
+              <span data-check="match" data-es="Las contraseñas coinciden" data-en="Passwords match">Passwords match</span>
+            </div>
+            <div id="adminMessage" class="inline-message bad" role="alert" hidden></div>
+            <div class="form-actions"><button class="button-secondary back" type="button" data-es="Atrás" data-en="Back">Back</button><button id="installButton" class="button-primary" type="submit" data-es="Iniciar instalación" data-en="Start installation">Start installation</button></div>
+          </section>
+          <section class="setup-page installation-page" data-page="4" hidden>
+            <h1 data-es="Instalación" data-en="Installation">Installation</h1>
+            <div id="progressRing" class="progress-ring" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Installation progress"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="progress-track" cx="60" cy="60" r="52"></circle><circle id="progressArc" class="progress-arc" cx="60" cy="60" r="52" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"></circle></svg><span id="progressValue">0%</span></div>
+            <p id="progressMessage" role="status" aria-live="polite"></p>
+            <div id="installError" class="inline-message bad" role="alert" hidden></div>
+            <button id="retryInstall" class="button-secondary" type="button" hidden data-es="Volver a la configuración" data-en="Back to setup">Back to setup</button>
+          </section>
+        </form>
+      </div>
+    </main>
+  </body>
+</html>

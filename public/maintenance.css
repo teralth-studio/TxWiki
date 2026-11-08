@@ -1,0 +1,184 @@
+:root {
+  color-scheme: dark;
+  font-family: 'DM Sans', 'Segoe UI', sans-serif;
+  background: #111214;
+  color: #f1f2f4;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  width: 100%;
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+.maintenance-body {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  overflow: auto;
+  background:
+    radial-gradient(ellipse at 50% 43%, rgba(86, 101, 151, 0.13), transparent 49%),
+    #111214;
+}
+.maintenance-card {
+  width: min(100%, 460px);
+  min-height: 460px;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  padding: 44px 40px 38px;
+  border: 1px solid #2e3037;
+  border-radius: 20px;
+  background: linear-gradient(155deg, #1a1b20 0%, #17181c 68%, #15161a 100%);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.38), inset 0 1px rgba(255, 255, 255, 0.035);
+  text-align: center;
+}
+.maintenance-mark {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 25px;
+}
+.maintenance-mark i {
+  width: 4px;
+  height: 13px;
+  border-radius: 4px;
+  background: #8398ef;
+  animation: maintenance-pulse 1.15s ease-in-out infinite;
+}
+.maintenance-mark i:nth-child(2) {
+  height: 21px;
+  animation-delay: 0.12s;
+}
+.maintenance-mark i:nth-child(3) {
+  animation-delay: 0.24s;
+}
+.maintenance-card h1 {
+  margin: 0;
+  font-size: clamp(29px, 6vw, 36px);
+  font-weight: 720;
+  letter-spacing: -0.045em;
+  line-height: 1.16;
+}
+.maintenance-message {
+  margin: 12px 0 24px;
+  color: #a7a9b2;
+  font-size: 15px;
+  line-height: 1.6;
+}
+.maintenance-progress {
+  position: relative;
+  width: 144px;
+  height: 144px;
+  display: grid;
+  place-items: center;
+}
+.maintenance-progress svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+.maintenance-progress circle {
+  fill: none;
+  stroke-width: 6;
+}
+.maintenance-track {
+  stroke: #30323a;
+}
+.maintenance-arc {
+  stroke: #91a5ff;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.35s ease;
+}
+.maintenance-progress span {
+  font-size: 27px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+}
+.maintenance-stage {
+  min-height: 24px;
+  margin: 18px 0 0;
+  color: #d7d9e0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.maintenance-rule {
+  width: 100%;
+  height: 1px;
+  margin-top: 25px;
+  background: #2c2e34;
+}
+.maintenance-footnote {
+  margin: 16px 0 0;
+  color: #787b85;
+  font-size: 11px;
+}
+@keyframes maintenance-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scaleY(0.7);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+@media (max-width: 480px) {
+  .maintenance-body {
+    padding: 18px;
+  }
+  .maintenance-card {
+    min-height: 420px;
+    padding: 34px 22px 30px;
+  }
+}
+@media (max-height: 560px) {
+  .maintenance-body {
+    padding-block: 12px;
+  }
+  .maintenance-card {
+    min-height: 0;
+    padding-block: 24px;
+  }
+  .maintenance-mark {
+    margin-bottom: 12px;
+  }
+  .maintenance-message {
+    margin: 8px 0 14px;
+  }
+  .maintenance-progress {
+    width: 112px;
+    height: 112px;
+  }
+  .maintenance-stage {
+    margin-top: 12px;
+  }
+  .maintenance-rule {
+    margin-top: 16px;
+  }
+  .maintenance-footnote {
+    margin-top: 10px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

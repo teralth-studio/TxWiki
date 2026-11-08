@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111214" />
+    <meta name="application-name" content="Teralth Wiki" />
+    <meta property="og:title" content="Teralth Wiki" />
+    <title>Loading...</title>
+    <link id="siteFavicon" rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+    <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/vendor/prism/prism.js" data-manual defer></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="global-loader" id="globalLoader" role="status" aria-live="polite" aria-label="Loading">
+      <span class="sr-only">Loading documentation</span>
+      <div class="skeleton-screen" aria-hidden="true">
+        <aside class="skeleton-sidebar">
+          <span class="skeleton-block skeleton-brand"></span
+          ><span class="skeleton-block skeleton-space"></span
+          ><span class="skeleton-block skeleton-search"></span
+          ><span class="skeleton-block skeleton-nav"></span
+          ><span class="skeleton-block skeleton-nav short"></span
+          ><span class="skeleton-block skeleton-nav"></span>
+        </aside>
+        <main class="skeleton-content">
+          <span class="skeleton-block skeleton-breadcrumb"></span
+          ><span class="skeleton-block skeleton-title"></span
+          ><span class="skeleton-block skeleton-subtitle"></span
+          ><span class="skeleton-block skeleton-section-title"></span
+          ><span class="skeleton-block skeleton-line"></span><span class="skeleton-block skeleton-line"></span
+          ><span class="skeleton-block skeleton-line medium"></span
+          ><span class="skeleton-block skeleton-card"></span>
+        </main>
+      </div>
+    </div>
+    <div id="app" class="shell">
+      <div class="sidebar-slot">
+      <aside class="sidebar" id="sidebar">
+        <div class="brand-row">
+          <button class="icon-button mobile-close" id="closeSidebar" aria-label="Cerrar menú">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        <div class="space-picker" id="spacePicker">
+          <button
+            id="spaceDropdownButton"
+            class="space-trigger"
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+          >
+            <span class="space-symbol"><i class="fa-solid fa-layer-group"></i></span
+            ><span id="spaceCurrentName">Documentación</span><i class="fa-solid fa-chevron-down chevron"></i>
+          </button>
+          <div
+            id="spaceDropdownMenu"
+            class="space-dropdown"
+            role="listbox"
+            aria-label="Espacios de documentación"
+          ></div>
+        </div>
+        <div class="search-box">
+          <i class="fa-solid fa-magnifying-glass"></i
+          ><input
+            id="searchInput"
+            type="search"
+            placeholder="Buscar documentación"
+            autocomplete="off"
+            aria-controls="searchSuggestions"
+            aria-expanded="false"
+          /><kbd>⌘ K</kbd>
+          <div class="search-suggestions" id="searchSuggestions" role="listbox" hidden></div>
+        </div>
+        <nav class="nav-tree" id="navTree" aria-label="Secciones"></nav>
+        <nav class="admin-navigation" id="adminNavigation" aria-label="Administration" hidden></nav>
+        <section class="support-card" id="supportCard" aria-label="Support">
+          <div class="support-card-heading">
+            <span class="support-status-dot"></span><strong id="supportTitle"></strong>
+          </div>
+          <p id="supportDescription"></p>
+          <a id="supportLink" class="support-card-link" href="#"><span id="supportLinkText"></span></a>
+        </section>
+      </aside>
+      </div>
+      <button class="mobile-shade" id="mobileShade" aria-label="Cerrar navegación"></button>
+      <div class="reading-layout" id="readingLayout">
+      <main class="main-column">
+        <header class="topbar">
+          <a href="/" class="brand topbar-brand" id="brand"
+            ><span class="brand-mark"><i class="fa-solid fa-book-open"></i></span
+            ><span class="brand-copy"
+              ><span class="brand-name">Teralth Studio</span
+              ><span class="brand-subtitle">documentation</span></span
+            ></a>
+          <button class="icon-button mobile-menu" id="openSidebar" aria-label="Abrir navegación">
+            <i class="fa-solid fa-bars"></i>
+          </button>
+          <a href="/" class="mobile-docs-brand" id="mobileDocsBrand"><span class="brand-mark"></span><span class="mobile-docs-name">Teralth Wiki</span></a>
+          <button class="icon-button mobile-docs-search" id="mobileDocsSearch" type="button" aria-label="Search documentation">
+            <i class="fa-solid fa-magnifying-glass"></i>
+          </button>
+          <div class="breadcrumbs" id="breadcrumbs">
+            <span>Documentación</span><i class="fa-solid fa-chevron-right"></i><span>Inicio</span>
+          </div>
+          <nav class="header-links" id="headerLinks" aria-label="Header links" hidden></nav>
+          <div class="top-actions">
+            <div class="language-control">
+              <button
+                class="language-trigger"
+                id="languageButton"
+                aria-label="Cambiar idioma"
+                aria-haspopup="menu"
+                aria-expanded="false"
+                aria-controls="languageMenu"
+              >
+                <span class="language-current-flag" aria-hidden="true"></span>
+                <span class="language-current-name"></span>
+                <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+              </button>
+              <div class="language-menu" id="languageMenu" role="menu" aria-label="Idioma"></div>
+            </div>
+            <button class="icon-button theme-toggle" id="themeToggle" aria-label="Cambiar tema">
+              <i class="fa-regular fa-sun"></i><i class="fa-regular fa-moon"></i>
+            </button>
+            <div class="user-menu-wrap top-user-menu-wrap">
+              <button
+                id="accountLink"
+                class="user-trigger top-user-trigger"
+                aria-haspopup="menu"
+                aria-expanded="false"
+              >
+                <i class="fa-solid fa-arrow-right-to-bracket"></i><span>Iniciar sesión</span>
+              </button>
+              <div id="userMenu" class="user-menu top-user-menu" role="menu">
+                <button data-user-action="password"><i class="fa-solid fa-key"></i> Cambiar contraseña</button
+                ><button data-user-action="logout">
+                  <i class="fa-solid fa-arrow-right-from-bracket"></i> Cerrar sesión
+                </button>
+              </div>
+            </div>
+          </div>
+        </header>
+        <div id="notice" class="notice" hidden></div>
+        <section class="article-wrap" id="articleWrap">
+          <article class="article" id="article"></article>
+          <section class="reactions" id="reactions">
+            <p>¿Te resultó útil esta página?</p>
+            <div class="reaction-buttons">
+              <button data-mood="happy" aria-label="Sí, fue útil">
+                <i class="fa-regular fa-face-smile"></i><span>0</span></button
+              ><button data-mood="neutral" aria-label="Más o menos">
+                <i class="fa-regular fa-face-meh"></i><span>0</span></button
+              ><button data-mood="sad" aria-label="No fue útil">
+                <i class="fa-regular fa-face-frown"></i><span>0</span>
+              </button>
+            </div>
+          </section>
+        </section>
+        <section class="auth-panel" id="authPanel" hidden></section>
+        <section class="admin-panel" id="adminPanel" hidden></section>
+        <div class="password-wall" id="passwordWall" hidden></div>
+      </main>
+      <aside class="toc" id="toc">
+        <div class="toc-inner">
+          <h2><i class="fa-solid fa-list-ul"></i> <span id="tocTitle">On this page</span></h2>
+          <nav id="tocLinks"></nav>
+          <section id="lastEdited" class="last-edited-card" hidden></section>
+        </div>
+      </aside>
+      <footer class="site-footer">
+        <span id="footerCopyright"></span><span id="footerContent"></span>
+      </footer>
+      </div>
+    </div>
+    <aside
+      id="cookieNotice"
+      class="cookie-notice"
+      role="region"
+      aria-live="polite"
+      aria-labelledby="cookieNoticeTitle"
+      aria-describedby="cookieNoticeText"
+      hidden
+    >
+      <div class="cookie-notice-content">
+        <span class="cookie-notice-icon" aria-hidden="true"><i class="fa-solid fa-cookie-bite"></i></span>
+        <div class="cookie-notice-copy">
+          <h2 id="cookieNoticeTitle">Cookies</h2>
+          <p id="cookieNoticeText">
+            We use essential cookies to make the wiki work and remember your preferences.
+          </p>
+        </div>
+      </div>
+      <div class="cookie-notice-actions">
+        <button id="acceptCookies" class="primary-button" type="button">Accept</button>
+      </div>
+    </aside>
+  </body>
+</html>

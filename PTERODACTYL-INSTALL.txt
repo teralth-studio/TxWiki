@@ -1,0 +1,18 @@
+TERALTH WIKI - INSTALACION EN PTERODACTYL
+
+1. Crea un servidor con un egg Node.js 20 o posterior.
+2. Asigna el puerto y una base MySQL en Pterodactyl.
+3. Extrae TODO el contenido de este ZIP directamente en la raiz del servidor.
+   package.json y pterodactyl-start.sh deben quedar en esa raiz.
+4. En Startup, usa este comando:
+   node pterodactyl-start.js
+5. Inicia el servidor. El script instala dependencias de produccion cuando
+   hacen falta y ejecuta el asistente de instalacion de Teralth Wiki.
+6. En File Manager, abre setup.key. Visita la direccion y puerto del servidor,
+   introduce el codigo y completa el asistente.
+7. En el formulario MySQL, usa exactamente las credenciales asignadas por
+   Pterodactyl. Completa tambien la verificacion SMTP requerida.
+
+No subas .env, setup.key, backups, datos ni la clave privada de publicacion.
+Para actualizar una wiki existente, sube este mismo ZIP en Administracion >
+Update; no lo extraigas sobre la instalacion existente.

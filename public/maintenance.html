@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content="#111214" />
+    <title>Updating...</title>
+    <link rel="stylesheet" href="/maintenance.css" />
+    <script src="/maintenance.js" defer></script>
+  </head>
+  <body class="maintenance-body">
+    <main class="maintenance-card" aria-labelledby="maintenanceTitle">
+      <div class="maintenance-mark" aria-hidden="true"><i></i><i></i><i></i></div>
+      <h1 id="maintenanceTitle">Updating...</h1>
+      <p class="maintenance-message">The site is temporarily unavailable.</p>
+      <div
+        class="maintenance-progress"
+        id="maintenanceProgress"
+        role="progressbar"
+        aria-label="Update progress"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow="0"
+      >
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <circle class="maintenance-track" cx="60" cy="60" r="52"></circle>
+          <circle
+            class="maintenance-arc"
+            id="maintenanceArc"
+            cx="60"
+            cy="60"
+            r="52"
+            pathLength="100"
+            stroke-dasharray="100"
+            stroke-dashoffset="100"
+          ></circle>
+        </svg>
+        <span id="maintenancePercent">0%</span>
+      </div>
+      <p class="maintenance-stage" id="maintenanceStage" role="status" aria-live="polite">
+        Preparing the update...
+      </p>
+      <span class="maintenance-rule" aria-hidden="true"></span>
+      <p class="maintenance-footnote">Please keep this page open.</p>
+    </main>
+  </body>
+</html>
