@@ -313,7 +313,13 @@ test('update admin page validates the selected package before opening maintenanc
       if (selector === '#updateValidationPercent') return progressPercent;
       if (selector === '#updateValidationBar') return progressBar;
       if (selector === '.update-validation-error') return errorBox;
-      if (selector.startsWith('[data-update-phase=')) return makeElement();
+      if (selector.startsWith('[data-update-phase=')) return {
+        classList: { toggle() {} },
+        querySelector(innerSelector) {
+          if (innerSelector === 'small') return { textContent: '' };
+          return { setAttribute() {}, firstElementChild: { style: {} } };
+        },
+      };
       return getElement(selector);
     },
   };

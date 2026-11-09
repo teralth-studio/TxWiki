@@ -72,19 +72,25 @@ window.TeralthAdminUpdates = {
         (result.configured ? '' : 'disabled') +
         '><i class="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i> ' +
         label('Actualizar manualmente', 'Update manually') +
-        '</button></form><div class="update-validation" id="updateValidation" hidden role="status" aria-live="polite"><div class="update-validation-heading"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i><span id="updateValidationStage"></span><strong id="updateValidationPercent">0%</strong></div><div class="update-overall-progress" id="updateValidationBar" role="progressbar" aria-label="' +
-        label('Progreso total de actualización', 'Overall update progress') +
-        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="update-overall-track" cx="60" cy="60" r="52"></circle><circle class="update-overall-arc" id="updateValidationArc" cx="60" cy="60" r="52" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"></circle></svg><span id="updateValidationRingPercent">0%</span></div><div class="update-current-phase"><span id="updateCurrentPhase"></span><strong id="updateCurrentPhasePercent">0%</strong></div><div class="update-current-phase-track" id="updateCurrentPhaseBar" role="progressbar" aria-label="' +
-        label('Progreso de la fase actual', 'Current phase progress') +
-        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div><ol class="update-phase-list"><li data-update-phase="preparation"><span>' +
+        '</button></form><div class="update-validation" id="updateValidation" hidden><div class="update-validation-heading" role="status" aria-live="polite"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i><span id="updateValidationStage"></span><strong id="updateValidationPercent">0%</strong></div><div class="update-progress-layout"><ol class="update-phase-list"><li data-update-phase="preparation"><div class="update-phase-heading"><span>' +
         label('Preparación', 'Preparation') +
-        '</span><small></small></li><li data-update-phase="verification"><span>' +
+        '</span><small></small></div><div class="update-phase-item-track" role="progressbar" aria-label="' +
+        label('Progreso de preparación', 'Preparation progress') +
+        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div></li><li data-update-phase="verification"><div class="update-phase-heading"><span>' +
         label('Verificación', 'Verification') +
-        '</span><small></small></li><li data-update-phase="installation"><span>' +
+        '</span><small></small></div><div class="update-phase-item-track" role="progressbar" aria-label="' +
+        label('Progreso de verificación', 'Verification progress') +
+        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div></li><li data-update-phase="installation"><div class="update-phase-heading"><span>' +
         label('Instalación', 'Installation') +
-        '</span><small></small></li><li data-update-phase="finalization"><span>' +
+        '</span><small></small></div><div class="update-phase-item-track" role="progressbar" aria-label="' +
+        label('Progreso de instalación', 'Installation progress') +
+        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div></li><li data-update-phase="finalization"><div class="update-phase-heading"><span>' +
         label('Finalización', 'Finalization') +
-        '</span><small></small></li></ol></div><div class="form-message auth-error update-validation-error" hidden role="alert"></div></section><section class="admin-section update-history-section"><div class="section-heading"><div><h2>' +
+        '</span><small></small></div><div class="update-phase-item-track" role="progressbar" aria-label="' +
+        label('Progreso de finalización', 'Finalization progress') +
+        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div></li></ol><div class="update-progress-main"><div class="update-overall-progress" id="updateValidationBar" role="progressbar" aria-label="' +
+        label('Progreso total de actualización', 'Overall update progress') +
+        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="update-overall-track" cx="60" cy="60" r="52"></circle><circle class="update-overall-arc" id="updateValidationArc" cx="60" cy="60" r="52" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"></circle></svg><span id="updateValidationRingPercent">0%</span></div><p class="update-current-phase"><span id="updateCurrentPhase"></span><strong id="updateCurrentPhasePercent">0%</strong></p></div></div><div class="form-message auth-error update-validation-error" hidden role="alert"></div></section><section class="admin-section update-history-section"><div class="section-heading"><div><h2>' +
         label('Actualizaciones instaladas', 'Installed updates') +
         '</h2><p>' +
         label('Las diez instalaciones más recientes en este sitio.', 'The ten most recent installations on this site.') +
@@ -275,7 +281,6 @@ async function runUpdate({ automatic, file, button, root, api, csrf, t, showErro
   const ring = root.querySelector('#updateValidationArc');
   const phaseLabel = root.querySelector('#updateCurrentPhase');
   const phasePercent = root.querySelector('#updateCurrentPhasePercent');
-  const phaseBar = root.querySelector('#updateCurrentPhaseBar');
   const errorBox = root.querySelector('.update-validation-error');
   const stageLabels = {
     receiving: t('Preparando el paquete de actualización…', 'Preparing the update package…'),
@@ -304,16 +309,18 @@ async function runUpdate({ automatic, file, button, root, api, csrf, t, showErro
     ring.setAttribute('stroke-dashoffset', String(100 - overall));
     phaseLabel.textContent = phaseLabels[currentPhase] || phaseLabels.preparation;
     phasePercent.textContent = `${currentAmount}%`;
-    phaseBar.setAttribute('aria-valuenow', String(currentAmount));
-    phaseBar.firstElementChild.style.width = `${currentAmount}%`;
     for (const [index, phaseName] of updatePhases.entries()) {
       const item = root.querySelector(`[data-update-phase="${phaseName}"]`);
       const state = item?.querySelector('small');
       const complete = currentStage === 'complete' || index < currentIndex;
       const active = index === currentIndex && currentStage !== 'complete';
+      const amount = complete ? 100 : active ? currentAmount : 0;
+      const phaseBar = item?.querySelector('[role="progressbar"]');
       item?.classList.toggle('is-complete', complete);
       item?.classList.toggle('is-active', active);
       item?.classList.toggle('is-failed', active && currentStage === 'failed');
+      phaseBar?.setAttribute('aria-valuenow', String(amount));
+      if (phaseBar?.firstElementChild) phaseBar.firstElementChild.style.width = `${amount}%`;
       if (state)
         state.textContent = complete
           ? t('Completada', 'Complete')

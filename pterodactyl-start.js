@@ -20,7 +20,24 @@ function run(command, args) {
   });
 }
 
+function missingDependencies(dependencies, resolveDependency = name => require.resolve(name, { paths: [root] })) {
+  return Object.keys(dependencies).filter((name) => {
+    try {
+      resolveDependency(name);
+      return false;
+    } catch (error) {
+      if (error.code === 'MODULE_NOT_FOUND' || error.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED') return true;
+      throw error;
+    }
+  });
+}
+
+function shouldInstallDependencies(installedHash, lockHash, missing) {
+  return installedHash !== lockHash || missing.length > 0;
+}
+
 async function main() {
+  const packageJson = JSON.parse(await fs.promises.readFile(path.join(root, 'package.json'), 'utf8'));
   const packageLock = await fs.promises.readFile(packageLockPath);
   const lockHash = crypto.createHash('sha256').update(packageLock).digest('hex');
   let installedHash = '';
@@ -30,8 +47,12 @@ async function main() {
     if (error.code !== 'ENOENT') throw error;
   }
 
-  if (installedHash !== lockHash) {
+  if (shouldInstallDependencies(installedHash, lockHash, missingDependencies(packageJson.dependencies || {}))) {
     await run('npm', ['ci', '--omit=dev', '--no-audit', '--no-fund']);
+    const missing = missingDependencies(packageJson.dependencies || {});
+    if (missing.length) {
+      throw new Error(`npm ci completed, but these runtime dependencies are unavailable: ${missing.join(', ')}.`);
+    }
     await fs.promises.writeFile(markerPath, `${lockHash}\n`, { mode: 0o600 });
   }
 
@@ -46,7 +67,11 @@ async function main() {
   });
 }
 
-main().catch(error => {
-  console.error(`Pterodactyl startup failed: ${error.message}`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch(error => {
+    console.error(`Pterodactyl startup failed: ${error.message}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { missingDependencies, shouldInstallDependencies };
