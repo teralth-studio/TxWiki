@@ -43,7 +43,7 @@ test('editor code text preserves line breaks, blank lines, indentation and liter
 });
 
 test('server sanitation retains code blocks without executing their contents', () => {
-  const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+  const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8').replace(/\r\n/g, '\n');
   const start = server.indexOf('const htmlPolicy =');
   const end = server.indexOf('\n\napp.disable(', start);
   assert.ok(start >= 0 && end > start);
@@ -56,7 +56,7 @@ test('server sanitation retains code blocks without executing their contents', (
 });
 
 test('server sanitation preserves nested spoilers and rich content without unsafe attributes', () => {
-  const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+  const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8').replace(/\r\n/g, '\n');
   const start = server.indexOf('const htmlPolicy =');
   const end = server.indexOf('\n\napp.disable(', start);
   const policy = vm.runInNewContext(server.slice(start, end) + '\nhtmlPolicy');

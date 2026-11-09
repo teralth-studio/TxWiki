@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const yazl = require('yazl');
+const { readRegularFileNoFollow } = require('./safe-file');
 const {
   formatSshPublicKey,
   parseUpdatePublicKey,
@@ -55,9 +56,13 @@ async function readReleaseFile(projectRoot, relativePath) {
     const stat = await fs.promises.lstat(current);
     if (stat.isSymbolicLink()) throw new Error(`Symbolic links are not allowed in release files: ${relativePath}`);
   }
-  const fileStat = await fs.promises.lstat(absolutePath);
-  if (!fileStat.isFile() || fileStat.isSymbolicLink()) throw new Error(`Not a regular release file: ${relativePath}`);
-  return fs.promises.readFile(absolutePath);
+  try {
+    return (await readRegularFileNoFollow(absolutePath)).content;
+  } catch (error) {
+    if (error.code === 'ERR_NOT_REGULAR_FILE' || error.code === 'ELOOP')
+      throw new Error(`Not a regular release file: ${relativePath}`, { cause: error });
+    throw error;
+  }
 }
 
 async function createUpdatePackage({

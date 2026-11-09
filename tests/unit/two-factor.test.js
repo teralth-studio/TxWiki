@@ -177,7 +177,7 @@ test('setup, recovery codes, challenge binding and disable are enforced server-s
 });
 
 test('pending sessions are guarded and translations cover the 2FA messages', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8').replace(/\r\n/g, '\n');
   assert.match(source, /if \(!req\.session\.pendingTwoFactor\) return next\(\)/);
   assert.match(source, /twoFactorSessionBinding\(req\.session\.user\.id, current\.two_factor_secret\)/);
   assert.match(source, /twoFactorLimiter[\s\S]*new MySqlRateLimitStore\('two-factor'\)/);
@@ -191,7 +191,7 @@ test('pending sessions are guarded and translations cover the 2FA messages', () 
 });
 
 test('password login creates only a restricted second-factor session', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8').replace(/\r\n/g, '\n');
   const start = source.indexOf("app.post('/api/auth/login'");
   const end = source.indexOf("app.post('/api/auth/logout'", start);
   let handler;
@@ -217,7 +217,7 @@ test('password login creates only a restricted second-factor session', async () 
 });
 
 test('pending-session API guard permits only challenge, logout and bootstrap', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8').replace(/\r\n/g, '\n');
   const marker = "app.use('/api', (req, res, next) => {\n  if (!req.session.pendingTwoFactor)";
   const start = source.indexOf(marker);
   const end = source.indexOf('\napp.use(', start + 1);
@@ -237,7 +237,7 @@ test('pending-session API guard permits only challenge, logout and bootstrap', (
 });
 
 test('existing sessions cannot bypass newly enabled or replaced 2FA', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8').replace(/\r\n/g, '\n');
   const marker = "app.use('/api', async (req, res, next) => {\n  if (!req.session.user) return next();";
   const start = source.indexOf(marker);
   const end = source.indexOf('\nconst mustRotate', start);

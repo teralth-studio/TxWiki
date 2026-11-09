@@ -191,11 +191,20 @@ function checkAdmin() {
 }
 function randomPassword() {
   const groups = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnopqrstuvwxyz', '23456789', '!@#$%&*_-'];
-  const choose = (chars) => chars[crypto.getRandomValues(new Uint32Array(1))[0] % chars.length];
+  const randomIndex = (limit) => {
+    const range = 0x100000000;
+    const ceiling = Math.floor(range / limit) * limit;
+    let value;
+    do {
+      value = crypto.getRandomValues(new Uint32Array(1))[0];
+    } while (value >= ceiling);
+    return value % limit;
+  };
+  const choose = (chars) => chars[randomIndex(chars.length)];
   const chars = groups.map(choose), all = groups.join('');
   while (chars.length < 20) chars.push(choose(all));
   for (let i = chars.length - 1; i > 0; i--) {
-    const j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1);
+    const j = randomIndex(i + 1);
     [chars[i], chars[j]] = [chars[j], chars[i]];
   }
   $('#adminPassword').value = chars.join('');

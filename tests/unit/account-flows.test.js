@@ -3,8 +3,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { test } = require('node:test');
 const vm = require('node:vm');
+const { senderEmailAddress, validEmailAddress } = require('../../scripts/auth/email-address');
 
-const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8').replace(/\r\n/g, '\n');
 function route(pathname, nextPath, dependencies) {
   const start = source.indexOf(`app.post('${pathname}'`);
   const end = source.indexOf(`\napp.post('${nextPath}'`, start);
@@ -13,6 +14,8 @@ function route(pathname, nextPath, dependencies) {
   const context = {
     app: { post: (...args) => { handler = args.at(-1); } },
     loginLimiter() {},
+    senderEmailAddress,
+    validEmailAddress,
     ...dependencies,
   };
   vm.runInNewContext(source.slice(start, end), context);

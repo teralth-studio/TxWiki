@@ -16,13 +16,11 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    name: Validate before publishing
+  environment:
+    name: Phase 1 - verify release environment
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write
-      actions: read
     steps:
       - name: Check out source and history
         uses: actions/checkout@v4
@@ -37,7 +35,7 @@ jobs:
           node-version: 24
           cache: npm
 
-      - name: Phase 1 - verify tag and SSH signing keys
+      - name: Verify tag and SSH signing keys
         env:
           RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
@@ -134,13 +132,57 @@ jobs:
             exit 1
           fi
 
-      - name: Phase 2 - build and run code tests
+  code_validation:
+    name: Phase 2 - build and run code tests
+    needs: environment
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build assets and run unit tests
         run: |
           set -euo pipefail
           npm run build:assets
           node --test tests/unit/*.test.js
 
-      - name: Phase 3 - audit dependencies
+  security:
+    name: Phase 3 - security validation
+    needs: code_validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Check out source and history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Audit dependencies
         run: npm audit --audit-level=low
 
       - name: Set up Go for secret scanning
@@ -160,6 +202,7 @@ jobs:
           languages: javascript-typescript
           build-mode: none
           queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Analyze with CodeQL
         id: codeql
@@ -207,10 +250,33 @@ jobs:
           print("CodeQL produced no security findings.")
           PY
 
+  playwright:
+    name: Phase 4 - run all Playwright tests
+    needs: security
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps
 
-      - name: Phase 4 - run all Playwright tests
+      - name: Run Playwright tests
         run: npx playwright test
 
       - name: Upload Playwright report
@@ -224,7 +290,7 @@ jobs:
 
   publish:
     name: Phase 5 - publish official GitHub Release
-    needs: validate
+    needs: [environment, code_validation, security, playwright]
     runs-on: ubuntu-latest
     permissions:
       contents: write

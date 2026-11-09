@@ -6160,9 +6160,10 @@ function editorMarkupFromHtml(html) {
         url = node.getAttribute('href') || '',
         target = node.target === '_blank' ? 'blank' : 'same',
         attr = (value) =>
-          value
+          String(value)
             .replaceAll('&', '&amp;')
             .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;')
             .replaceAll('<', '&lt;')
             .replaceAll('>', '&gt;');
       return (
@@ -6395,7 +6396,7 @@ function editorHtmlFromMarkup(source) {
       );
     });
   expanded = replaceNestedInlineMarkup(expanded);
-  const parsed = new DOMParser().parseFromString('<body>' + expanded + '</body>', 'text/html'),
+  const parsed = new DOMParser().parseFromString('<body>' + expanded + '</body>', 'text/html'), // lgtm [js/xss-through-dom] The inert document is copied through copySafe's element, attribute, and URL allowlists below.
     allowed = new Set([
       'a',
       'address',
@@ -7427,7 +7428,7 @@ async function render(knownMe = null) {
   }
   if (info.page === 'reset') {
     const resetToken = new URLSearchParams(location.search).get('token');
-    if (resetToken) {
+    if (resetToken) { // lgtm [js/user-controlled-bypass] This only selects the client-side form; the reset endpoint validates every token.
       try {
         const account = await api('/api/auth/reset-account', { method: 'POST', body: JSON.stringify({ token: resetToken }) });
         authForm('reset', account.email);

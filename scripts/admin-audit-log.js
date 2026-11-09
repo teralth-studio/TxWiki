@@ -6,8 +6,23 @@ const AUDIT_INSERT =
 
 function cleanAuditDetail(value, maxLength = 180) {
   if (typeof value !== 'string') return '';
-  return value
-    .replace(/<[^>]*>/g, ' ')
+  let cleaned = '';
+  let offset = 0;
+  while (offset < value.length) {
+    const opening = value.indexOf('<', offset);
+    if (opening < 0) {
+      cleaned += value.slice(offset);
+      break;
+    }
+    const closing = value.indexOf('>', opening + 1);
+    if (closing < 0) {
+      cleaned += value.slice(offset);
+      break;
+    }
+    cleaned += value.slice(offset, opening) + ' ';
+    offset = closing + 1;
+  }
+  return cleaned
     .replace(/[\u0000-\u001f\u007f]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

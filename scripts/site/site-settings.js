@@ -45,11 +45,16 @@ function normalizeSiteOptions(input, oldSite) {
     for (const [locale, item] of Object.entries(support.translations)) {
       if (!/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(locale) || !item || typeof item !== 'object' || Array.isArray(item))
         invalid('Revisa las traducciones del bloque de soporte.');
-      translations[locale] = {
-        title: text(item.title, 120, 'el título de soporte'),
-        description: text(item.description, 500, 'la descripción de soporte'),
-        button: text(item.button, 80, 'el texto del botón'),
-      };
+      Object.defineProperty(translations, locale, {
+        configurable: true,
+        enumerable: true,
+        value: {
+          title: text(item.title, 120, 'el título de soporte'),
+          description: text(item.description, 500, 'la descripción de soporte'),
+          button: text(item.button, 80, 'el texto del botón'),
+        },
+        writable: true,
+      });
     }
     if (Object.keys(translations).length > 100) invalid('Hay demasiadas traducciones de soporte.');
     const color = (value) => {

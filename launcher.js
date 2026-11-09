@@ -9,6 +9,7 @@ const mysql = require('mysql2/promise');
 const nodemailer = require('nodemailer');
 const { rateLimit } = require('express-rate-limit');
 const { createSiteRateLimiter } = require('./scripts/site-rate-limit');
+const { senderEmailAddress, validEmailAddress } = require('./scripts/auth/email-address');
 const { publicScripts, publicStaticOnly, sendPublicHtml } = require('./scripts/public-scripts');
 const { saveInstallerImages } = require('./scripts/installer-images');
 
@@ -123,16 +124,17 @@ async function verifyDatabase(credentials, checkSchemaAccess = false) {
 
 const verifiedDbSignatures = new Set();
 const verifiedEmailSignatures = new Set();
+const signatureKey = crypto.randomBytes(32);
 function rememberSignature(signatures, signature) {
   signatures.delete(signature);
   signatures.add(signature);
   if (signatures.size > 64) signatures.delete(signatures.values().next().value);
 }
+function requestSignature(value) {
+  return crypto.createHmac('sha256', signatureKey).update(JSON.stringify(value)).digest('hex');
+}
 function databaseSignature(body) {
-  return crypto
-    .createHash('sha256')
-    .update(JSON.stringify(validateDatabase(body)))
-    .digest('hex');
+  return requestSignature(validateDatabase(body));
 }
 function emailSignature(body) {
   const values = {
@@ -148,13 +150,11 @@ function emailSignature(body) {
       .trim()
       .toLowerCase(),
   };
-  return crypto.createHash('sha256').update(JSON.stringify(values)).digest('hex');
+  return requestSignature(values);
 }
-function validEmail(value) {
-  return /^\S+@\S+\.\S+$/.test(value);
-}
+const validEmail = validEmailAddress;
 function validSender(value) {
-  return validEmail((String(value).match(/<([^<>]+)>\s*$/)?.[1] || value).trim());
+  return validEmail(senderEmailAddress(value));
 }
 function diagnosticDetails(error, secrets = []) {
   let message = String(error?.message || error?.code || 'Connection failed')

@@ -113,15 +113,18 @@ function registerTwoFactorRoutes(app, { pool, query, auth, limiter, bcrypt, sess
         return res.status(401).json({ error: 'La sesión de 2FA venció. Inicia sesión de nuevo.' });
       }
       const code = String(req.body.code || '').trim();
-      if (req.body.recovery === true) {
-        const normalized = code.toUpperCase().replace(/-/g, '');
+      const normalizedRecoveryCode = code.toUpperCase().replace(/-/g, '');
+      let recoveryIndex = -1;
+      if (/^[A-F0-9]{32}$/.test(normalizedRecoveryCode)) {
         const codes = typeof user.two_factor_recovery_codes === 'string' ? JSON.parse(user.two_factor_recovery_codes) : user.two_factor_recovery_codes;
         if (!Array.isArray(codes)) throw new Error('TWO_FACTOR_RECOVERY_DATA_INVALID');
-        const index = /^[A-F0-9]{32}$/.test(normalized) ? codes.indexOf(digest(normalized)) : -1;
-        if (index < 0) { await conn.rollback(); transaction = false; return failCode(res); }
-        codes.splice(index, 1);
-        await conn.execute('UPDATE users SET two_factor_recovery_codes=? WHERE id=?', [JSON.stringify(codes), user.id]);
-      } else {
+        recoveryIndex = codes.indexOf(digest(normalizedRecoveryCode));
+        if (recoveryIndex >= 0) {
+          codes.splice(recoveryIndex, 1);
+          await conn.execute('UPDATE users SET two_factor_recovery_codes=? WHERE id=?', [JSON.stringify(codes), user.id]);
+        }
+      }
+      if (recoveryIndex < 0) {
         const step = security.verify(security.decrypt(user.two_factor_secret), code, user.two_factor_last_step);
         if (step === null) { await conn.rollback(); transaction = false; return failCode(res); }
         await conn.execute('UPDATE users SET two_factor_last_step=? WHERE id=?', [step, user.id]);

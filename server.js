@@ -22,6 +22,7 @@ const { requireCurrentAdminSession } = require('./scripts/admin-session');
 const { requirePrimaryAdmin, resolveSmtpPassword } = require('./scripts/smtp-security');
 const { SESSION_IDLE_MS, rejectLegacySessions } = require('./scripts/session-security');
 const { createSiteRateLimiter } = require('./scripts/site-rate-limit');
+const { senderEmailAddress, validEmailAddress } = require('./scripts/auth/email-address');
 const { loginDetails } = require('./scripts/login-details');
 const { registerTwoFactorRoutes, binding: twoFactorBinding, sessionBinding: twoFactorSessionBinding, LIFETIME: TWO_FACTOR_LIFETIME } = require('./scripts/two-factor');
 const { publicScripts, publicStaticOnly, sendPublicHtml } = require('./scripts/public-scripts');
@@ -649,6 +650,8 @@ async function repairMissingTables(force = false) {
   }
 }
 const json = (value) => (typeof value === 'string' ? JSON.parse(value) : value);
+const setOwnProperty = (object, key, value) =>
+  Object.defineProperty(object, key, { configurable: true, enumerable: true, value, writable: true });
 const slugify = (value) =>
   String(value || '')
     .normalize('NFKD')
@@ -990,8 +993,17 @@ const defaultLanguageCatalog = [
   { code: 'pt-BR', name: 'Português (Brasil)', enabled: false },
 ];
 const validLanguageCode = (code) =>
-  typeof code === 'string' && /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{2,8})*$/.test(code);
-const languageFile = (code) => path.join(__dirname, 'languages', 'language_' + code + '.json');
+  typeof code === 'string' &&
+  code.length <= 64 &&
+  /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{2,8})*$/.test(code);
+const languageDirectory = path.resolve(__dirname, 'languages');
+const languageFile = (code) => {
+  if (!validLanguageCode(code)) throw new Error('Invalid language code.');
+  const filename = path.basename(`language_${code}.json`);
+  const destination = path.resolve(languageDirectory, filename);
+  if (path.dirname(destination) !== languageDirectory) throw new Error('Invalid language path.');
+  return destination;
+};
 async function writeLanguageFile(entry, previousCode = '') {
   const destination = languageFile(entry.code);
   let data = null;
@@ -1164,8 +1176,8 @@ const backupImportLimiter = rateLimit({
   store: new MySqlRateLimitStore('backup-import'),
 });
 const updateLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  limit: 2,
+  windowMs: 30 * 60 * 1000,
+  limit: 5,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   keyGenerator: (req) => `user:${req.session.user.id}`,
@@ -1776,6 +1788,24 @@ const updateUpload = multer({
     callback(null, true);
   },
 });
+function generatedUploadPath(file, directory, filenamePattern) {
+  const filename = typeof file?.filename === 'string' ? file.filename : '';
+  if (!filenamePattern.test(filename) || path.basename(filename) !== filename)
+    throw new Error('Invalid temporary upload filename.');
+  const root = path.resolve(directory);
+  const target = path.resolve(root, filename);
+  if (path.dirname(target) !== root) throw new Error('Temporary upload escaped its directory.');
+  return target;
+}
+async function removeTemporaryUpload(file, directory, filenamePattern) {
+  if (!file) return;
+  const target = generatedUploadPath(file, directory, filenamePattern);
+  try {
+    await fs.promises.unlink(target);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
 const backupPersistentTables = ['users', 'spaces', 'categories', 'pages', 'settings', 'reactions', 'roles'];
 async function listBackups() {
   await fs.promises.mkdir(backupRoot, { recursive: true, mode: 0o700 });
@@ -2111,8 +2141,7 @@ app.post('/api/auth/register', loginLimiter, async (req, res, next) => {
       username = String(req.body.username || '').trim(),
       password = String(req.body.password || '');
     if (
-      !/^\S+@\S+\.\S+$/.test(email) ||
-      email.length > 254 ||
+      !validEmailAddress(email) ||
       !/^[\p{L}\p{N}_-]{2,60}$/u.test(username) ||
       password.length < 8 ||
       Buffer.byteLength(password, 'utf8') > 72 ||
@@ -2783,12 +2812,13 @@ app.post(
   async (req, res, next) => {
     let connection;
     try {
-      if (!req.file) {
+      if (!req.file) { // lgtm [js/user-controlled-bypass] Missing multipart input is rejected before signature verification or installation.
         setUpdateValidation('failed', updateValidationState.progress);
         return res.status(400).json({ error: 'Selecciona un paquete .zip.' });
       }
       setUpdateValidation('verifying', 8);
-      const pkg = await verifyUpdatePackage(req.file.path, updatePublicKey, {
+      const uploadPath = generatedUploadPath(req.file, updateUploadRoot, /^package-[0-9a-f-]{36}\.zip$/);
+      const pkg = await verifyUpdatePackage(uploadPath, updatePublicKey, {
         onProgress: (progress) => setUpdateValidation('verifying', 8 + Math.floor((progress / 18) * 62)),
       });
       await ensureUpdateTables(pool);
@@ -2836,7 +2866,7 @@ app.post(
     } finally {
       connection?.release();
       updateValidationBusy = false;
-      if (req.file?.path) await fs.promises.unlink(req.file.path).catch(() => {});
+      await removeTemporaryUpload(req.file, updateUploadRoot, /^package-[0-9a-f-]{36}\.zip$/);
     }
   },
 );
@@ -3016,7 +3046,8 @@ app.post(
         return res.status(400).json({ error: 'Selecciona el archivo ZIP que quieres importar.' });
       stage = path.join(backupRoot, '.restore-' + crypto.randomUUID());
       await fs.promises.mkdir(stage, { mode: 0o700 });
-      const parsed = await readBackupZip(req.file.path, stage);
+      const uploadPath = generatedUploadPath(req.file, backupRoot, /^\.upload-[0-9a-f-]{36}\.zip$/);
+      const parsed = await readBackupZip(uploadPath, stage);
       let snapshot;
       try {
         snapshot = JSON.parse(
@@ -3097,7 +3128,7 @@ app.post(
         response.json({ error: message });
       }
     } finally {
-      if (req.file?.path) await fs.promises.unlink(req.file.path).catch(() => {});
+      await removeTemporaryUpload(req.file, backupRoot, /^\.upload-[0-9a-f-]{36}\.zip$/);
       if (stage && stage.startsWith(backupRoot + path.sep))
         await fs.promises.rm(stage, { recursive: true, force: true }).catch(() => {});
     }
@@ -3424,8 +3455,7 @@ app.post('/api/admin/smtp/test', auth, primaryAdminOnly, async (req, res, next) 
       password.length > 1024 ||
       /[\r\n\0]/.test(from) ||
       from.length > 254 ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(testEmail) ||
-      testEmail.length > 254
+      !validEmailAddress(testEmail)
     )
       return res
         .status(400)
@@ -3434,7 +3464,7 @@ app.post('/api/admin/smtp/test', auth, primaryAdminOnly, async (req, res, next) 
       return res
         .status(400)
         .json({ error: 'Completa tanto el usuario SMTP como su contraseña, o deja ambos vacíos.' });
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(from.match(/<([^>]+)>/)?.[1] || from))
+    if (!validEmailAddress(senderEmailAddress(from)))
       return res.status(400).json({ error: 'El remitente debe contener un correo válido.' });
     const nextConfig = { host, port, secure, user, password, from },
       transport = buildMailer(nextConfig);
@@ -3873,12 +3903,12 @@ app.put('/api/admin/languages', auth, async (req, res, next) => {
           content = json(row.content),
           changed = false;
         if (Object.prototype.hasOwnProperty.call(titles, item.previousCode)) {
-          titles[item.code] = titles[item.previousCode];
+          setOwnProperty(titles, item.code, titles[item.previousCode]);
           delete titles[item.previousCode];
           changed = true;
         }
         if (Object.prototype.hasOwnProperty.call(content, item.previousCode)) {
-          content[item.code] = content[item.previousCode];
+          setOwnProperty(content, item.code, content[item.previousCode]);
           delete content[item.previousCode];
           changed = true;
         }
@@ -3892,7 +3922,7 @@ app.put('/api/admin/languages', auth, async (req, res, next) => {
       for (const row of await query('SELECT id,names FROM categories')) {
         const names = json(row.names);
         if (Object.prototype.hasOwnProperty.call(names, item.previousCode)) {
-          names[item.code] = names[item.previousCode];
+          setOwnProperty(names, item.code, names[item.previousCode]);
           delete names[item.previousCode];
           await query('UPDATE categories SET names=? WHERE id=?', [JSON.stringify(names), row.id]);
         }
@@ -4656,6 +4686,28 @@ const escapeHeadValue = (value) =>
     /[&<>"']/g,
     (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char],
   );
+function replaceOpeningTag(html, prefix, requiredAttribute, replacement) {
+  const start = html.toLowerCase().indexOf(prefix.toLowerCase());
+  if (start < 0) return html;
+  const end = html.indexOf('>', start);
+  if (end < 0) return html;
+  if (requiredAttribute && !html.slice(start, end).toLowerCase().includes(requiredAttribute.toLowerCase()))
+    return html;
+  return html.slice(0, start) + replacement + html.slice(end + 1);
+}
+function replaceElementContents(html, tag, replacement) {
+  const lowered = html.toLowerCase();
+  const start = lowered.indexOf(`<${tag}`);
+  if (start < 0) return html;
+  const openingEnd = html.indexOf('>', start);
+  if (openingEnd < 0) return html;
+  const boundary = lowered[start + tag.length + 1];
+  if (boundary !== '>' && boundary !== ' ' && boundary !== '\t') return html;
+  const closingStart = lowered.indexOf(`</${tag}>`, openingEnd + 1);
+  if (closingStart < 0) return html;
+  const closingEnd = closingStart + tag.length + 3;
+  return html.slice(0, start) + `<${tag}>${replacement}</${tag}>` + html.slice(closingEnd);
+}
 const sendAppIndex = sendPublicHtml('index.html', async (html, req) => {
   const [row] = await query("SELECT setting_value FROM settings WHERE setting_key='site' LIMIT 1"),
     site = row ? json(row.setting_value) : {},
@@ -4683,25 +4735,31 @@ const sendAppIndex = sendPublicHtml('index.html', async (html, req) => {
     const canonical = base.origin + base.pathname.replace(/\/$/, '') + (req.path || '/');
     head += `<link rel="canonical" href="${escapeHeadValue(canonical)}">`;
   }
-  return html
-    .replace('</head>', head + '</head>')
-    .replace(/<title>[^<]*<\/title>/i, '<title>' + escapeHeadValue(name) + '</title>')
-    .replace(
-      /<meta name="application-name" content="[^"]*"\s*\/?\s*>/i,
-      '<meta name="application-name" content="' + escapeHeadValue(name) + '">',
-    )
-    .replace(
-      /<meta property="og:title" content="[^"]*"\s*\/?\s*>/i,
-      '<meta property="og:title" content="' + escapeHeadValue(seo.socialTitle || name) + '">',
-    )
-    .replace(
-      /<link id="siteFavicon"[^>]*>/i,
-      '<link id="siteFavicon" rel="icon" type="' +
-        (favicon.startsWith('/media/') ? 'image/webp' : 'image/svg+xml') +
-        '" href="' +
-        escapeHeadValue(favicon) +
-        '">',
-    );
+  const headEnd = html.indexOf('</head>');
+  if (headEnd >= 0) html = html.slice(0, headEnd) + head + html.slice(headEnd);
+  html = replaceElementContents(html, 'title', escapeHeadValue(name));
+  html = replaceOpeningTag(
+    html,
+    '<meta name="application-name"',
+    'content="',
+    '<meta name="application-name" content="' + escapeHeadValue(name) + '">',
+  );
+  html = replaceOpeningTag(
+    html,
+    '<meta property="og:title"',
+    'content="',
+    '<meta property="og:title" content="' + escapeHeadValue(seo.socialTitle || name) + '">',
+  );
+  return replaceOpeningTag(
+    html,
+    '<link id="siteFavicon"',
+    '',
+    '<link id="siteFavicon" rel="icon" type="' +
+      (favicon.startsWith('/media/') ? 'image/webp' : 'image/svg+xml') +
+      '" href="' +
+      escapeHeadValue(favicon) +
+      '">',
+  );
 });
 app.get(['/login', '/register', '/reset', '/verify'], sendAppIndex);
 const adminPanelPermissions = ['admin.view'];

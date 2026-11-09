@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const yauzl = require('yauzl');
+const { readRegularFileNoFollow } = require('./safe-file');
 
 const maxEntries = 1200;
 const maxManifestBytes = 128 * 1024;
@@ -587,12 +588,14 @@ async function applyUpdatePackage({
         throw new UpdateError('La ruta de destino de la actualización no es segura.', 400);
       let prior = null;
       try {
-        const stat = await fs.promises.lstat(target);
-        if (stat.isSymbolicLink() || !stat.isFile())
-          throw new UpdateError('La ruta de destino de la actualización no es segura.', 400);
-        prior = { content: await fs.promises.readFile(target), mode: stat.mode & 0o777 };
+        const existing = await readRegularFileNoFollow(target);
+        prior = { content: existing.content, mode: existing.mode };
       } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
+        if (error.code !== 'ENOENT') {
+          if (error.code === 'ERR_NOT_REGULAR_FILE' || error.code === 'ELOOP')
+            throw new UpdateError('La ruta de destino de la actualización no es segura.', 400);
+          throw error;
+        }
       }
       appliedFiles.push({ target, prior, staged: `${target}.update-${crypto.randomUUID()}.tmp` });
       await fs.promises.writeFile(appliedFiles.at(-1).staged, file.content, {
