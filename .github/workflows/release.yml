@@ -4,6 +4,14 @@ on:
   push:
     tags:
       - 'v*.*.*-release'
+      - 'v*.*.*-beta'
+      - 'v*.*.*-beta.*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to build and publish
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -16,6 +24,8 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Node.js
@@ -26,6 +36,24 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Validate release tag and source branch
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-release$ ]]; then
+            source_branch=main
+          elif [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-beta(\.(0|[1-9][0-9]*))?$ ]]; then
+            source_branch=beta
+          else
+            echo "Expected vMAJOR.MINOR.PATCH-release or vMAJOR.MINOR.PATCH-beta[.N]." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${RELEASE_TAG}^{commit}" "origin/${source_branch}"; then
+            echo "Release tag $RELEASE_TAG must point to a commit on the $source_branch branch." >&2
+            exit 1
+          fi
 
       - name: Build production assets
         run: npm run build:assets
@@ -52,6 +80,8 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Node.js
@@ -67,8 +97,9 @@ jobs:
         run: npm run build:assets
 
       - name: Create and verify signed release package
+        id: package
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
           UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_SIGNING_PUBLIC_KEY }}
         run: |
@@ -76,8 +107,18 @@ jobs:
 
           if [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-release$ ]]; then
             version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+            source_branch=main
+            is_prerelease=false
+          elif [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-beta(\.(0|[1-9][0-9]*))?$ ]]; then
+            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+            source_branch=beta
+            is_prerelease=true
           else
-            echo "Invalid release tag: expected vMAJOR.MINOR.PATCH-release." >&2
+            echo "Expected vMAJOR.MINOR.PATCH-release or vMAJOR.MINOR.PATCH-beta[.N]." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${RELEASE_TAG}^{commit}" "origin/${source_branch}"; then
+            echo "Release tag $RELEASE_TAG must point to a commit on the $source_branch branch." >&2
             exit 1
           fi
           if [[ -z "$UPDATE_SIGNING_KEY" ]]; then
@@ -102,14 +143,37 @@ jobs:
           mkdir -p releases
           mv "$generated_package" "releases/${RELEASE_TAG}.zip"
           test -s "releases/${RELEASE_TAG}.zip"
+          echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
+
+      - name: Upload signed ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.release_tag || github.ref_name }}.zip
+          path: releases/${{ inputs.release_tag || github.ref_name }}.zip
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          IS_PRERELEASE: ${{ steps.package.outputs.is_prerelease }}
         run: |
           set -euo pipefail
-          gh release create "$RELEASE_TAG" "releases/${RELEASE_TAG}.zip" \
-            --verify-tag \
-            --title "$RELEASE_TAG" \
-            --generate-notes
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "releases/${RELEASE_TAG}.zip" --clobber
+            if [[ "$IS_PRERELEASE" == true ]]; then
+              gh release edit "$RELEASE_TAG" --prerelease
+            fi
+          elif [[ "$IS_PRERELEASE" == true ]]; then
+            gh release create "$RELEASE_TAG" "releases/${RELEASE_TAG}.zip" \
+              --verify-tag \
+              --title "$RELEASE_TAG" \
+              --generate-notes \
+              --prerelease
+          else
+            gh release create "$RELEASE_TAG" "releases/${RELEASE_TAG}.zip" \
+              --verify-tag \
+              --title "$RELEASE_TAG" \
+              --generate-notes
+          fi
