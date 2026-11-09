@@ -280,6 +280,49 @@ function openZip(buffer) {
   });
 }
 
+async function findDirectoryEntry(directory, name) {
+  const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+  const entry = entries.find((candidate) => candidate.name === name);
+  if (!entry || entry.isSymbolicLink() || !entry.isDirectory()) return null;
+  return { entry, path: path.join(directory, entry.name) };
+}
+
+async function findFileEntry(directory, name) {
+  const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+  const entry = entries.find((candidate) => candidate.name === name);
+  if (!entry || entry.isSymbolicLink() || !entry.isFile()) return null;
+  return { entry, path: path.join(directory, entry.name) };
+}
+
+async function readRegularFile(file, maxBytes = MAX_ENTRY_BYTES) {
+  let handle;
+  try {
+    handle = await fs.promises.open(
+      file,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0),
+    );
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > maxBytes)
+      fail('THEME_FILE_TYPE_INVALID', 'A theme contains an unsupported file type.');
+    return await handle.readFile();
+  } finally {
+    await handle?.close();
+  }
+}
+
+async function resolveThemeFile(directory, segments) {
+  let current = directory;
+  for (let index = 0; index < segments.length; index++) {
+    const final = index === segments.length - 1;
+    const found = final
+      ? await findFileEntry(current, segments[index])
+      : await findDirectoryEntry(current, segments[index]);
+    if (!found) return null;
+    current = found.path;
+  }
+  return current;
+}
+
 function extractEntry(zip, entry, target) {
   return new Promise((resolve, reject) => {
     zip.openReadStream(entry, (error, stream) => {
@@ -301,9 +344,9 @@ function extractEntry(zip, entry, target) {
   });
 }
 
-async function verifyImageAsset(file, expectedFormat) {
+async function verifyImageAsset(buffer, expectedFormat) {
   try {
-    const metadata = await sharp(file, { limitInputPixels: 16_000_000 }).metadata();
+    const metadata = await sharp(buffer, { limitInputPixels: 16_000_000 }).metadata();
     const actual = metadata.format === 'heif' && metadata.compression === 'av1' ? 'avif' : metadata.format;
     if (actual !== expectedFormat || !metadata.width || !metadata.height || metadata.width > 5000 || metadata.height > 5000)
       fail('THEME_IMAGE_INVALID', 'A theme image does not match its extension or exceeds the dimension limit.');
@@ -314,67 +357,67 @@ async function verifyImageAsset(file, expectedFormat) {
 }
 
 async function validateThemeFiles(directory, slug) {
-  const settingsPath = path.join(directory, 'settings.json');
+  const settingsFile = await resolveThemeFile(directory, ['settings.json']);
+  if (!settingsFile) fail('THEME_SETTINGS_MISSING', 'The ZIP must contain settings.json in its root.');
   let settingsBuffer;
-  try { settingsBuffer = await fs.promises.readFile(settingsPath); }
-  catch { fail('THEME_SETTINGS_MISSING', 'The ZIP must contain settings.json in its root.'); }
+  try { settingsBuffer = await readRegularFile(settingsFile, MAX_SETTINGS_BYTES); }
+  catch (error) {
+    if (error.code === 'ENOENT') fail('THEME_SETTINGS_MISSING', 'The ZIP must contain settings.json in its root.');
+    throw error;
+  }
   if (settingsBuffer.length > MAX_SETTINGS_BYTES)
     fail('THEME_SETTINGS_TOO_LARGE', 'The theme settings.json file exceeds its size limit.');
   let parsed;
   try { parsed = JSON.parse(settingsBuffer.toString('utf8')); }
   catch { fail('THEME_SETTINGS_INVALID', 'The theme settings.json file is not valid JSON.'); }
-  const definition = normalizeThemeDefinition(parsed), cssPath = path.join(directory, 'theme.css');
+  const definition = normalizeThemeDefinition(parsed);
+  const cssPath = await resolveThemeFile(directory, ['theme.css']);
+  if (!cssPath) fail('THEME_STYLESHEET_MISSING', 'The ZIP must contain theme.css in its root.');
   let css;
-  try { css = await fs.promises.readFile(cssPath, 'utf8'); }
-  catch { fail('THEME_STYLESHEET_MISSING', 'The ZIP must contain theme.css in its root.'); }
+  try { css = (await readRegularFile(cssPath, MAX_CSS_BYTES)).toString('utf8'); }
+  catch (error) {
+    if (error.code === 'ENOENT') fail('THEME_STYLESHEET_MISSING', 'The ZIP must contain theme.css in its root.');
+    throw error;
+  }
   const stylesheet = scopeThemeCss(css, slug);
-  const previewPath = path.join(directory, 'preview.png');
-  try {
-    const preview = await fs.promises.readFile(previewPath);
+  const previewPath = await resolveThemeFile(directory, ['preview.png']);
+  if (previewPath) {
+    const preview = await readRegularFile(previewPath, 10 * 1024 * 1024);
     if (preview.length > 10 * 1024 * 1024 || preview.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a')
       fail('THEME_PREVIEW_INVALID', 'The preview.png file must be a valid PNG under 10 MB.');
-    await verifyImageAsset(previewPath, 'png');
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+    await verifyImageAsset(preview, 'png');
   }
-  const assetsRoot = path.join(directory, 'assets');
+  const assetsRoot = await findDirectoryEntry(directory, 'assets');
   async function verifyAssets(folder) {
     for (const entry of await fs.promises.readdir(folder, { withFileTypes: true })) {
-      const file = path.join(folder, entry.name), stat = await fs.promises.lstat(file);
-      if (stat.isSymbolicLink()) fail('THEME_SYMLINK_NOT_ALLOWED', 'Theme packages cannot contain symbolic links.');
-      if (entry.isDirectory()) { await verifyAssets(file); continue; }
+      if (entry.isSymbolicLink()) fail('THEME_SYMLINK_NOT_ALLOWED', 'Theme packages cannot contain symbolic links.');
+      if (entry.isDirectory()) {
+        const child = await findDirectoryEntry(folder, entry.name);
+        if (!child) fail('THEME_SYMLINK_NOT_ALLOWED', 'Theme packages cannot contain symbolic links.');
+        await verifyAssets(child.path);
+        continue;
+      }
       if (!entry.isFile()) fail('THEME_FILE_TYPE_INVALID', 'A theme contains an unsupported file type.');
+      const file = await findFileEntry(folder, entry.name);
+      if (!file) fail('THEME_SYMLINK_NOT_ALLOWED', 'Theme packages cannot contain symbolic links.');
+      const buffer = await readRegularFile(file.path);
       const extension = path.extname(entry.name).toLowerCase();
-      if (IMAGE_FORMATS.has(extension)) await verifyImageAsset(file, IMAGE_FORMATS.get(extension));
+      if (IMAGE_FORMATS.has(extension)) await verifyImageAsset(buffer, IMAGE_FORMATS.get(extension));
       else {
-        const signature = FONT_SIGNATURES.get(extension);
-        const first = await fs.promises.open(file, 'r');
-        try {
-          const bytes = Buffer.alloc(4);
-          await first.read(bytes, 0, 4, 0);
-          if (!signature.some((item) => bytes.toString('binary') === item))
-            fail('THEME_FONT_INVALID', 'A theme font file has an invalid signature.');
-        } finally { await first.close(); }
+        const signatures = FONT_SIGNATURES.get(extension);
+        if (!signatures || !signatures.some((item) => buffer.subarray(0, 4).toString('binary') === item))
+          fail('THEME_FONT_INVALID', 'A theme font file has an invalid signature.');
       }
     }
   }
-  try { await verifyAssets(assetsRoot); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (assetsRoot) await verifyAssets(assetsRoot.path);
   const assetReferences = [...stylesheet.matchAll(new RegExp(`url\\(["']?\\/theme-assets\\/${slug}\\/(assets\\/[A-Za-z0-9._/-]+)["']?\\)`, 'g'))];
   for (const [, relative] of assetReferences) {
     const segments = relative.split('/');
     if (segments.some((part) => !/^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$/.test(part) || part === '.' || part === '..'))
       fail('THEME_CSS_ASSET_INVALID', 'The stylesheet references an unsafe theme asset path.');
-    let current = directory;
-    for (const segment of segments) {
-      current = path.join(current, segment);
-      let stat;
-      try { stat = await fs.promises.lstat(current); }
-      catch { fail('THEME_CSS_ASSET_MISSING', 'The stylesheet references an asset that is missing from the theme ZIP.'); }
-      if (stat.isSymbolicLink()) fail('THEME_SYMLINK_NOT_ALLOWED', 'Theme packages cannot contain symbolic links.');
-    }
-    const assetStat = await fs.promises.stat(current);
-    if (!assetStat.isFile()) fail('THEME_CSS_ASSET_MISSING', 'The stylesheet references an asset that is missing from the theme ZIP.');
+    const asset = await resolveThemeFile(directory, segments);
+    if (!asset) fail('THEME_CSS_ASSET_MISSING', 'The stylesheet references an asset that is missing from the theme ZIP.');
   }
   return { definition, stylesheet };
 }
@@ -451,23 +494,15 @@ async function readThemeDefinition(themesRoot, slug) {
   // Default is shipped with the application and must never be read from the
   // writable themes directory. Legacy themes/default folders are ignored.
   if (slug === DEFAULT_THEME) {
-    let stat;
-    try { stat = await fs.promises.lstat(DEFAULT_THEME_ROOT); }
-    catch (error) {
-      if (error.code === 'ENOENT') fail('THEME_DEFAULT_MISSING', 'The built-in Default theme is missing.', 500);
-      throw error;
-    }
-    if (stat.isSymbolicLink() || !stat.isDirectory())
-      fail('THEME_DIRECTORY_INVALID', 'The built-in theme directory is not safe.', 500);
-    const real = await fs.promises.realpath(DEFAULT_THEME_ROOT);
-    return validateThemeFiles(real, DEFAULT_THEME);
+    const root = path.dirname(DEFAULT_THEME_ROOT);
+    const found = await findDirectoryEntry(root, path.basename(DEFAULT_THEME_ROOT));
+    if (!found) fail('THEME_DEFAULT_MISSING', 'The built-in Default theme is missing.', 500);
+    return validateThemeFiles(found.path, DEFAULT_THEME);
   }
-  const root = await fs.promises.realpath(themesRoot), directory = path.join(root, slug);
-  let stat;
-  try { stat = await fs.promises.lstat(directory); }
-  catch (error) { if (error.code === 'ENOENT') fail('THEME_NOT_FOUND', 'Theme not found.', 404); throw error; }
-  if (stat.isSymbolicLink() || !stat.isDirectory()) fail('THEME_DIRECTORY_INVALID', 'The theme directory is not safe.', 500);
-  const real = await fs.promises.realpath(directory);
+  const root = await fs.promises.realpath(themesRoot);
+  const found = await findDirectoryEntry(root, slug);
+  if (!found) fail('THEME_NOT_FOUND', 'Theme not found.', 404);
+  const real = await fs.promises.realpath(found.path);
   if (!real.startsWith(root + path.sep)) fail('THEME_PATH_INVALID', 'The theme directory escapes the themes folder.', 500);
   return validateThemeFiles(real, slug);
 }
@@ -480,12 +515,10 @@ async function listThemes(themesRoot) {
     if (!entry.isDirectory() || entry.isSymbolicLink() || !safeThemeSlug(entry.name) || entry.name === DEFAULT_THEME) continue;
     try {
       const { definition } = await readThemeDefinition(themesRoot, entry.name);
-      const directory = path.join(themesRoot, entry.name);
+      const directory = await findDirectoryEntry(themesRoot, entry.name);
       let previewUrl = '';
-      try {
-        const stat = await fs.promises.lstat(path.join(directory, 'preview.png'));
-        if (stat.isFile() && !stat.isSymbolicLink()) previewUrl = `/theme-assets/${entry.name}/preview.png`;
-      } catch {}
+      if (directory && await findFileEntry(directory.path, 'preview.png'))
+        previewUrl = `/theme-assets/${entry.name}/preview.png`;
       result.push({ slug: entry.name, ...definition, previewUrl });
     } catch (error) {
       const code = error instanceof ThemeError ? error.code : 'THEME_INVALID';
@@ -501,14 +534,10 @@ async function listThemes(themesRoot) {
 async function removeTheme(themesRoot, slug) {
   if (!safeThemeSlug(slug) || slug === DEFAULT_THEME)
     fail('THEME_DELETE_FORBIDDEN', 'The built-in Default theme cannot be deleted.', 400);
-  const root = await fs.promises.realpath(themesRoot), target = path.join(root, slug);
-  let stat;
-  try { stat = await fs.promises.lstat(target); }
-  catch (error) { if (error.code === 'ENOENT') fail('THEME_NOT_FOUND', 'Theme not found.', 404); throw error; }
-  const real = await fs.promises.realpath(target);
-  if (stat.isSymbolicLink() || !stat.isDirectory() || !real.startsWith(root + path.sep))
-    fail('THEME_DIRECTORY_INVALID', 'The theme directory is not safe.', 500);
-  await fs.promises.rm(target, { recursive: true, force: false });
+  const root = await fs.promises.realpath(themesRoot);
+  const target = await findDirectoryEntry(root, slug);
+  if (!target) fail('THEME_NOT_FOUND', 'Theme not found.', 404);
+  await fs.promises.rm(target.path, { recursive: true, force: false });
 }
 
 async function readThemeAsset(themesRoot, slug, rawAssetPath) {
@@ -521,27 +550,26 @@ async function readThemeAsset(themesRoot, slug, rawAssetPath) {
   if (relative !== 'theme.css' && relative !== 'preview.png' && !ASSET_EXTENSIONS.has(path.extname(relative).toLowerCase())) return null;
   let directory;
   if (slug === DEFAULT_THEME) {
-    const stat = await fs.promises.lstat(DEFAULT_THEME_ROOT).catch(() => null);
-    if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) return null;
-    directory = await fs.promises.realpath(DEFAULT_THEME_ROOT);
+    const root = path.dirname(DEFAULT_THEME_ROOT);
+    const found = await findDirectoryEntry(root, path.basename(DEFAULT_THEME_ROOT));
+    if (!found) return null;
+    directory = found.path;
   } else {
     const root = await fs.promises.realpath(themesRoot);
-    directory = path.join(root, slug);
+    const found = await findDirectoryEntry(root, slug);
+    if (!found) return null;
+    directory = found.path;
   }
-  const candidate = path.resolve(directory, relative);
-  if (!candidate.startsWith(directory + path.sep)) return null;
-  let current = directory;
-  for (const segment of segments) {
-    current = path.join(current, segment);
-    let stat;
-    try { stat = await fs.promises.lstat(current); } catch { return null; }
-    if (stat.isSymbolicLink()) return null;
+  const candidate = await resolveThemeFile(directory, segments);
+  if (!candidate) return null;
+  let buffer;
+  try {
+    buffer = await readRegularFile(candidate, relative === 'theme.css' ? MAX_CSS_BYTES : MAX_ENTRY_BYTES);
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ELOOP') return null;
+    if (error instanceof ThemeError && error.code === 'THEME_FILE_TYPE_INVALID') return null;
+    throw error;
   }
-  const real = await fs.promises.realpath(candidate), stat = await fs.promises.stat(real);
-  if (!real.startsWith(directory + path.sep) || !stat.isFile() || stat.size > MAX_ENTRY_BYTES) return null;
-  if (relative === 'theme.css' && stat.size > MAX_CSS_BYTES)
-    fail('THEME_CSS_INVALID', 'The theme stylesheet is missing or exceeds its size limit.');
-  const buffer = await fs.promises.readFile(real);
   if (relative === 'theme.css') {
     const compiled = scopeThemeCss(buffer.toString('utf8'), slug);
     return { buffer: Buffer.from(compiled), contentType: 'text/css; charset=utf-8' };
