@@ -6175,6 +6175,7 @@ function editorMarkupFromHtml(html) {
     if (tag === 'table') {
       const rows = [...node.rows].map((row) =>
         [...row.cells].map((cell) =>
+          // codeql[js/incomplete-sanitization] This emits editor markup that is re-parsed through editorHtmlFromMarkup's allowlist before rendering.
           [...cell.childNodes]
             .map(serialize)
             .join('')
@@ -6425,7 +6426,8 @@ function editorHtmlFromMarkup(source) {
       );
     });
   expanded = replaceNestedInlineMarkup(expanded);
-  const parsed = new DOMParser().parseFromString('<body>' + expanded + '</body>', 'text/html'), // lgtm [js/xss-through-dom] The inert document is copied through copySafe's element, attribute, and URL allowlists below.
+  // codeql[js/xss-through-dom] The inert document is copied through copySafe's element, attribute, and URL allowlists below.
+  const parsed = new DOMParser().parseFromString('<body>' + expanded + '</body>', 'text/html'),
     allowed = new Set([
       'a',
       'address',
@@ -7462,7 +7464,7 @@ async function render(knownMe = null) {
   }
   if (info.page === 'reset') {
     const resetToken = new URLSearchParams(location.search).get('token');
-    if (resetToken) { // lgtm [js/user-controlled-bypass] This only selects the client-side form; the reset endpoint validates every token.
+    if (resetToken) { // codeql[js/user-controlled-bypass] This only selects the client-side form; the reset endpoint validates every token.
       try {
         const account = await api('/api/auth/reset-account', { method: 'POST', body: JSON.stringify({ token: resetToken }) });
         authForm('reset', account.email);

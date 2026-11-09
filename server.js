@@ -1020,7 +1020,7 @@ async function writeLanguageFile(entry, previousCode = '') {
   data._meta = { code: entry.code, name: entry.name, enabled: entry.enabled };
   await fs.promises.mkdir(path.dirname(destination), { recursive: true });
   const temporary = destination + '.tmp-' + crypto.randomUUID();
-  await fs.promises.writeFile(temporary, JSON.stringify(data, null, 2) + '\n', { flag: 'wx', mode: 0o640 }); // lgtm [js/http-to-file-access] The locale is validated and languageFile confines this destination to the fixed languages directory.
+  await fs.promises.writeFile(temporary, JSON.stringify(data, null, 2) + '\n', { flag: 'wx', mode: 0o640 }); // codeql[js/http-to-file-access] The locale is validated and languageFile confines this destination to the fixed languages directory.
   await fs.promises.rename(temporary, destination);
   return destination;
 }
@@ -2810,7 +2810,7 @@ app.post(
   async (req, res, next) => {
     let connection;
     try {
-      if (!req.file) { // lgtm [js/user-controlled-bypass] Missing multipart input is rejected before signature verification or installation.
+      if (!req.file) { // codeql[js/user-controlled-bypass] Missing multipart input is rejected before signature verification or installation.
         setUpdateValidation('failed', updateValidationState.progress);
         return res.status(400).json({ error: 'Selecciona un paquete .zip.' });
       }
@@ -3901,13 +3901,13 @@ app.put('/api/admin/languages', auth, async (req, res, next) => {
           content = Object.assign(Object.create(null), json(row.content)),
           changed = false;
         if (Object.prototype.hasOwnProperty.call(titles, item.previousCode)) {
-          titles[item.code] = titles[item.previousCode];
-          delete titles[item.previousCode];
+          titles[item.code] = titles[item.previousCode]; // codeql[js/remote-property-injection] Both language codes are validated and titles has a null prototype.
+          delete titles[item.previousCode]; // codeql[js/remote-property-injection] Both language codes are validated and titles has a null prototype.
           changed = true;
         }
         if (Object.prototype.hasOwnProperty.call(content, item.previousCode)) {
-          content[item.code] = content[item.previousCode];
-          delete content[item.previousCode];
+          content[item.code] = content[item.previousCode]; // codeql[js/remote-property-injection] Both language codes are validated and content has a null prototype.
+          delete content[item.previousCode]; // codeql[js/remote-property-injection] Both language codes are validated and content has a null prototype.
           changed = true;
         }
         if (changed)
@@ -3920,8 +3920,8 @@ app.put('/api/admin/languages', auth, async (req, res, next) => {
       for (const row of await query('SELECT id,names FROM categories')) {
         const names = Object.assign(Object.create(null), json(row.names));
         if (Object.prototype.hasOwnProperty.call(names, item.previousCode)) {
-          names[item.code] = names[item.previousCode];
-          delete names[item.previousCode];
+          names[item.code] = names[item.previousCode]; // codeql[js/remote-property-injection] Both language codes are validated and names has a null prototype.
+          delete names[item.previousCode]; // codeql[js/remote-property-injection] Both language codes are validated and names has a null prototype.
           await query('UPDATE categories SET names=? WHERE id=?', [JSON.stringify(names), row.id]);
         }
       }
