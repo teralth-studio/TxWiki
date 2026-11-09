@@ -258,7 +258,6 @@ test('update admin page validates the selected package before opening maintenanc
   const progressStage = { textContent: '' };
   const progressPercent = { textContent: '' };
   const progressFill = { style: {} };
-  const progressNote = { textContent: '' };
   const errorBox = { hidden: true, textContent: '' };
   class MockRequest {
     constructor() {
@@ -295,7 +294,6 @@ test('update admin page validates the selected package before opening maintenanc
       if (selector === '#updateValidationPercent') return progressPercent;
       if (selector === '#updateValidationBar') return progressBar;
       if (selector === '#updateValidationFill') return progressFill;
-      if (selector === '#updateValidationNote') return progressNote;
       if (selector === '.update-validation-error') return errorBox;
       return null;
     },
@@ -332,6 +330,7 @@ test('update admin page validates the selected package before opening maintenanc
   assert.match(root.innerHTML, /Site updates/);
   assert.match(root.innerHTML, /1\.0\.0/);
   assert.match(root.innerHTML, /id="updateValidation"/);
+  assert.doesNotMatch(root.innerHTML, /updateValidationNote/);
   await submit({ preventDefault() {} });
   assert.equal(uploaded[0].url, '/api/admin/updates/validate');
   assert.equal(uploaded[0].method, 'POST');
@@ -342,7 +341,7 @@ test('update admin page validates the selected package before opening maintenanc
   assert.deepEqual(sequence, ['validate', 'maintenance', 'install']);
   assert.equal(progress.hidden, false);
   assert.equal(progressPercent.textContent, '100%');
-  assert.match(progressNote.textContent, /no static check can guarantee that it has no malicious behavior/);
+  assert.equal(progressStage.textContent, 'Validation complete. Preparing maintenance…');
   assert.equal(button.disabled, true);
   assert.equal(alerts.length, 1);
 });

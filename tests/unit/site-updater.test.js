@@ -342,6 +342,46 @@ test('one signed release package carries verified installer files and update fil
   });
 });
 
+test('a legacy-signed bridge package installs the next trusted update key', async () => {
+  await temporaryDirectory(async directory => {
+    const projectRoot = path.join(directory, 'project');
+    const outputDirectory = path.join(directory, 'releases');
+    const signingKeyPath = path.join(directory, 'legacy-signing-key.pem');
+    const { privateKey: legacyPrivateKey, publicKey: legacyPublicKey } = crypto.generateKeyPairSync('ed25519');
+    const { publicKey: nextPublicKey } = crypto.generateKeyPairSync('ed25519');
+    const legacyTrustedKey = formatSshPublicKey(legacyPublicKey);
+    const nextTrustedKey = formatSshPublicKey(nextPublicKey);
+
+    await fs.promises.mkdir(path.join(projectRoot, 'public'), { recursive: true });
+    await fs.promises.mkdir(path.join(projectRoot, 'scripts'), { recursive: true });
+    await fs.promises.writeFile(
+      signingKeyPath,
+      legacyPrivateKey.export({ type: 'pkcs8', format: 'pem' }),
+    );
+    await fs.promises.writeFile(path.join(projectRoot, 'server.js'), 'module.exports = true;');
+    await fs.promises.writeFile(path.join(projectRoot, 'public', 'app.js'), 'window.releaseReady = true;');
+    await fs.promises.writeFile(
+      path.join(projectRoot, 'scripts', 'update-public-key.js'),
+      `module.exports = '${nextTrustedKey}';\n`,
+    );
+
+    const packagePath = await createReleasePackage({
+      version: '1.0.2',
+      id: 'release-1-0-2-bridge',
+      projectRoot,
+      destinationDirectory: outputDirectory,
+      signingKeyPath,
+      trustedPublicKey: legacyTrustedKey,
+    });
+    const bridge = await verifyUpdatePackage(packagePath, legacyTrustedKey);
+    assert.ok(bridge.files.some(file => file.path === 'scripts/update-public-key.js'));
+    assert.equal(
+      bridge.installation.find(file => file.path === 'scripts/update-public-key.js').content.toString(),
+      `module.exports = '${nextTrustedKey}';\n`,
+    );
+  });
+});
+
 test('release packages include the complete local module graph of every runtime entrypoint', async () => {
   const projectRoot = path.join(__dirname, '..', '..');
   const installationFiles = new Set(await collectInstallationFiles(projectRoot));

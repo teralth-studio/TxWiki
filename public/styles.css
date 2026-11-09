@@ -7268,12 +7268,6 @@ button[aria-busy='true'] {
 .update-validation.is-failed .update-validation-track > span::after {
   animation: none;
 }
-.update-validation > p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.55;
-}
 .update-validation-error {
   margin-top: 10px;
 }
@@ -9698,4 +9692,3 @@ body.wiki-mode .shell:has(#articleWrap:not([hidden])) .header-links a:focus-visi
 body.wiki-mode .shell:has(#articleWrap:not([hidden])) .sidebar .nav-group-title:hover {
   color: var(--text);
 }
-

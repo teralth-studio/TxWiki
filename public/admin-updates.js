@@ -54,7 +54,7 @@ window.TeralthAdminUpdates = {
         label('Verificar e instalar', 'Verify and install') +
         '</button><div class="update-validation" id="updateValidation" hidden role="status" aria-live="polite"><div class="update-validation-heading"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i><span id="updateValidationStage"></span><strong id="updateValidationPercent">0%</strong></div><div class="update-validation-track" id="updateValidationBar" role="progressbar" aria-label="' +
         label('Progreso de validación del paquete', 'Package validation progress') +
-        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="updateValidationFill"></span></div><p id="updateValidationNote"></p></div><div class="form-message auth-error update-validation-error" hidden role="alert"></div></form></section><section class="admin-section update-history-section"><div class="section-heading"><div><h2>' +
+        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="updateValidationFill"></span></div></div><div class="form-message auth-error update-validation-error" hidden role="alert"></div></form></section><section class="admin-section update-history-section"><div class="section-heading"><div><h2>' +
         label('Actualizaciones instaladas', 'Installed updates') +
         '</h2><p>' +
         label('Las diez instalaciones más recientes en este sitio.', 'The ten most recent installations on this site.') +
@@ -102,7 +102,6 @@ window.TeralthAdminUpdates = {
           progressPercent = root.querySelector('#updateValidationPercent'),
           progressBar = root.querySelector('#updateValidationBar'),
           progressFill = root.querySelector('#updateValidationFill'),
-          progressNote = root.querySelector('#updateValidationNote'),
           errorBox = root.querySelector('.update-validation-error');
         const validationLabels = {
           receiving: t('Subiendo el paquete para validarlo…', 'Uploading the package for validation…'),
@@ -120,10 +119,6 @@ window.TeralthAdminUpdates = {
           progressFill.style.width = `${amount}%`;
           progress.classList.toggle('is-failed', stage === 'failed');
           progress.classList.toggle('is-complete', stage === 'verified');
-          progressNote.textContent =
-            stage === 'verified'
-              ? t('La firma, los archivos y el entorno se validaron; ahora se bloqueará el sitio para instalar. El código no se ejecutó, y ninguna validación estática puede garantizar que no tenga comportamiento malicioso.', 'The signature, files, and environment passed validation; the site will now be locked for installation. The code was not executed, and no static check can guarantee that it has no malicious behavior.')
-              : t('Se comprueban firma, hashes, rutas, sintaxis y entorno. El código del ZIP no se ejecuta durante la validación; ningún análisis estático puede garantizar que el código firmado carezca de comportamiento malicioso.', 'The server checks the signature, hashes, paths, syntax, and environment. ZIP code is not executed during validation; static analysis cannot guarantee that signed code has no malicious behavior.');
         };
         button.disabled = true;
         errorBox.hidden = true;
