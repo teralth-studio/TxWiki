@@ -3,9 +3,8 @@ name: Publish Release
 on:
   push:
     tags:
-      - 'v*.*.*-release'
-      - 'v*.*.*-beta'
-      - 'v*.*.*-beta.*'
+      - '[0-9]*'
+      - 'v[0-9]*'
   workflow_dispatch:
     inputs:
       release_tag:
@@ -38,23 +37,53 @@ jobs:
           node-version: 24
           cache: npm
 
-      - name: Phase 1 - verify source, GitHub environment, and token policy
+      - name: Phase 1 - verify tag and SSH signing keys
         env:
           RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_SIGNING_PUBLIC_KEY }}
         run: |
           set -euo pipefail
-          if [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-release$ ]]; then
-            source_branch=main
-          elif [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-beta(\.(0|[1-9][0-9]*))?$ ]]; then
-            source_branch=beta
+          if [[ "$RELEASE_TAG" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Release version: ${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
           else
-            echo "Expected vMAJOR.MINOR.PATCH-release or vMAJOR.MINOR.PATCH-beta[.N]." >&2
+            echo "Expected a version tag such as 1.3.1 or v1.3.1." >&2
             exit 1
           fi
-          if ! git merge-base --is-ancestor "${RELEASE_TAG}^{commit}" "origin/${source_branch}"; then
-            echo "Release tag $RELEASE_TAG must point to a commit on the $source_branch branch." >&2
+          if ! git merge-base --is-ancestor "${RELEASE_TAG}^{commit}" origin/main; then
+            echo "Release tag $RELEASE_TAG must point to a commit on main." >&2
             exit 1
           fi
+
+          if [[ -z "$UPDATE_SIGNING_KEY" || -z "$UPDATE_PUBLIC_KEY" ]]; then
+            echo "Configure UPDATE_SIGNING_KEY and UPDATE_SIGNING_PUBLIC_KEY in GitHub Actions." >&2
+            exit 1
+          fi
+          node <<'NODE'
+          const crypto = require('node:crypto');
+          const { parseUpdatePublicKey } = require('./scripts/site-updater');
+
+          try {
+            const privateKey = crypto.createPrivateKey(process.env.UPDATE_SIGNING_KEY);
+            if (privateKey.asymmetricKeyType !== 'ed25519')
+              throw new Error('The signing key must be Ed25519.');
+
+            const configuredPublicKey = parseUpdatePublicKey(process.env.UPDATE_PUBLIC_KEY);
+            const bundledPublicKey = parseUpdatePublicKey(require('./scripts/update-public-key'));
+            const derivedPublicKey = crypto.createPublicKey(privateKey);
+            const der = key => key.export({ type: 'spki', format: 'der' });
+
+            if (!der(configuredPublicKey).equals(der(bundledPublicKey)))
+              throw new Error('The GitHub public-key variable does not match the updater key in the source.');
+            if (!der(derivedPublicKey).equals(der(configuredPublicKey)))
+              throw new Error('The private signing key does not match the official updater public key.');
+
+            console.log('SSH signing keys match the official updater key.');
+          } catch (error) {
+            console.error(`SSH key validation failed: ${error.message}`);
+            process.exitCode = 1;
+          }
+          NODE
 
           node --version
           npm --version
@@ -161,7 +190,7 @@ jobs:
           retention-days: 30
 
   publish:
-    name: Phase 5 - publish signed GitHub Release
+    name: Phase 5 - publish official GitHub Release
     needs: validate
     runs-on: ubuntu-latest
     permissions:
@@ -195,20 +224,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-release$ ]]; then
+          if [[ "$RELEASE_TAG" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
-            source_branch=main
-            is_prerelease=false
-          elif [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-beta(\.(0|[1-9][0-9]*))?$ ]]; then
-            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
-            source_branch=beta
-            is_prerelease=true
           else
-            echo "Expected vMAJOR.MINOR.PATCH-release or vMAJOR.MINOR.PATCH-beta[.N]." >&2
+            echo "Expected a version tag such as 1.3.1 or v1.3.1." >&2
             exit 1
           fi
-          if ! git merge-base --is-ancestor "${RELEASE_TAG}^{commit}" "origin/${source_branch}"; then
-            echo "Release tag $RELEASE_TAG must point to a commit on the $source_branch branch." >&2
+          if ! git merge-base --is-ancestor "${RELEASE_TAG}^{commit}" origin/main; then
+            echo "Release tag $RELEASE_TAG must point to a commit on main." >&2
             exit 1
           fi
           if [[ -z "$UPDATE_SIGNING_KEY" ]]; then
@@ -225,6 +248,7 @@ jobs:
           printf '%s' "$UPDATE_SIGNING_KEY" > "$signing_key"
           trap 'rm -f "$signing_key"' EXIT
           export UPDATE_SIGNING_KEY_PATH="$signing_key"
+          export UPDATE_PUBLIC_KEY
 
           node scripts/create-release-package.js "$version" "$RELEASE_TAG"
           generated_package="releases/${version}-${RELEASE_TAG}.zip"
@@ -233,7 +257,6 @@ jobs:
           mkdir -p releases
           mv "$generated_package" "releases/${RELEASE_TAG}.zip"
           test -s "releases/${RELEASE_TAG}.zip"
-          echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
 
       - name: Upload signed ZIP artifact
         uses: actions/upload-artifact@v4
@@ -247,22 +270,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
-          IS_PRERELEASE: ${{ steps.package.outputs.is_prerelease }}
         run: |
           set -euo pipefail
-          beta_notes="Advertencia: versión beta experimental desde la rama beta. Instálala y úsala bajo tu propio riesgo."
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "releases/${RELEASE_TAG}.zip" --clobber
-            if [[ "$IS_PRERELEASE" == true ]]; then
-              gh release edit "$RELEASE_TAG" --prerelease --notes "$beta_notes"
-            fi
-          elif [[ "$IS_PRERELEASE" == true ]]; then
-            gh release create "$RELEASE_TAG" "releases/${RELEASE_TAG}.zip" \
-              --verify-tag \
-              --title "$RELEASE_TAG" \
-              --generate-notes \
-              --notes "$beta_notes" \
-              --prerelease
           else
             gh release create "$RELEASE_TAG" "releases/${RELEASE_TAG}.zip" \
               --verify-tag \
