@@ -28,6 +28,7 @@ const { publicScripts, publicStaticOnly, sendPublicHtml } = require('./scripts/p
 const { normalizeSiteOptions, normalizeSupportUrl } = require('./scripts/site-settings');
 const { HEADER_LINK_LIMIT, normalizeHeaderLink, normalizeHeaderLinks } = require('./scripts/header-links');
 const { migrateSitePermissions } = require('./scripts/role-permissions');
+const { createAdminAuditMiddleware } = require('./scripts/admin-audit-log');
 const { createUpdateMaintenance } = require('./scripts/update-maintenance');
 const {
   UpdateError,
@@ -208,6 +209,7 @@ const expectedTables = [
   'roles',
   'background_jobs',
   'rate_limit_buckets',
+  'admin_logs',
 ];
 let schemaRepairPromise = null;
 let lastSchemaCheck = 0;
@@ -909,6 +911,7 @@ const rolePermissionsDefault = [
   'backups.export',
   'backups.schedule',
   'updates.install',
+  'logs.view',
   'header_links.create_edit',
   'header_links.delete',
 ];
@@ -1325,6 +1328,7 @@ app.use(
     return user;
   }),
 );
+app.use(createAdminAuditMiddleware(pool));
 
 async function initialize() {
   await store.onReady();
@@ -3127,6 +3131,7 @@ const rolePermissionKeys = [
   'backups.export',
   'backups.schedule',
   'updates.install',
+  'logs.view',
   'header_links.create_edit',
   'header_links.delete',
 ];
@@ -3267,6 +3272,30 @@ app.delete(
 app.get('/api/admin/roles', auth, requirePermission('roles.manage'), async (req, res, next) => {
   try {
     res.json({ roles: await getRoleCatalog() });
+  } catch (error) {
+    next(error);
+  }
+});
+app.get('/api/admin/logs', auth, requirePermission('logs.view'), async (req, res, next) => {
+  try {
+    const rawPage = req.query.page === undefined ? '1' : String(req.query.page),
+      pageNumber = Number(rawPage),
+      search = String(req.query.search || '').trim().slice(0, 100);
+    if (!/^\d{1,7}$/.test(rawPage) || !Number.isSafeInteger(pageNumber) || pageNumber < 1)
+      return res.status(400).json({ error: 'Selecciona una página válida.' });
+    const [count] = await query(
+        "SELECT COUNT(*) AS total FROM admin_logs WHERE (? = '' OR LOCATE(LOWER(?),LOWER(username))>0 OR LOCATE(LOWER(?),LOWER(action_key))>0 OR LOCATE(LOWER(?),LOWER(detail))>0)",
+        [search, search, search, search],
+      ),
+      total = Number(count?.total || 0),
+      totalPages = Math.max(1, Math.ceil(total / 10)),
+      page = Math.min(pageNumber, totalPages),
+      offset = (page - 1) * 10,
+      logs = await query(
+        "SELECT id,DATE_FORMAT(occurred_at,'%Y-%m-%dT%H:%i:%sZ') AS occurredAt,username,action_key AS actionKey,detail FROM admin_logs WHERE (? = '' OR LOCATE(LOWER(?),LOWER(username))>0 OR LOCATE(LOWER(?),LOWER(action_key))>0 OR LOCATE(LOWER(?),LOWER(detail))>0) ORDER BY occurred_at DESC,id DESC LIMIT 10 OFFSET ?",
+        [search, search, search, search, offset],
+      );
+    res.set('Cache-Control', 'private, no-store').json({ logs, page, total, totalPages });
   } catch (error) {
     next(error);
   }
