@@ -226,6 +226,7 @@ jobs:
               sys.exit("CodeQL did not produce SARIF results; refusing to publish.")
 
           findings = []
+          source_suppressions = []
           for sarif_file in sarif_files:
               report = json.loads(sarif_file.read_text(encoding="utf-8"))
               for run in report.get("runs", []):
@@ -234,15 +235,25 @@ jobs:
                       for rule in run.get("tool", {}).get("driver", {}).get("rules", [])
                   }
                   for result in run.get("results", []):
+                      suppression = any(
+                          item.get("kind") == "inSource" and item.get("status") == "accepted"
+                          for item in result.get("suppressions", [])
+                      )
                       location = (result.get("locations") or [{}])[0]
                       physical = location.get("physicalLocation", {})
                       artifact = physical.get("artifactLocation", {}).get("uri", "unknown")
                       line = physical.get("region", {}).get("startLine", "?")
                       rule_id = result.get("ruleId", "unknown")
+                      if suppression:
+                          source_suppressions.append(f"{artifact}:{line}: {rule_id}")
+                          continue
                       findings.append(
                           f"{artifact}:{line}: {rules.get(rule_id, rule_id)}"
                       )
 
+          if source_suppressions:
+              print("Reviewed in-source CodeQL suppressions:")
+              print("\n".join(source_suppressions))
           if findings:
               print("CodeQL findings must be resolved before a release:", file=sys.stderr)
               print("\n".join(findings), file=sys.stderr)

@@ -453,6 +453,51 @@ test('update file allowlist and SQL parser reject paths and multiple statements'
   assert.throws(() => singleSqlStatement('   '), /está vacía/);
 });
 
+test('update validation rejects missing uploads before package verification', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8').replace(/\r\n/g, '\n');
+  const start = source.indexOf("app.post(\n  '/api/admin/updates/validate'");
+  const end = source.indexOf("\napp.get(\n  '/api/admin/updates/validation-progress'", start);
+  assert.ok(start >= 0 && end > start);
+  let handlers = [], verified = false;
+  const context = {
+    app: { post: (...args) => { handlers = args.slice(1); } },
+    auth: (_req, _res, next) => next(),
+    requirePermission: () => (_req, _res, next) => next(),
+    updateLimiter: (_req, _res, next) => next(),
+    updateMaintenance: { active: false },
+    updateValidationBusy: false,
+    updateUploadRoot: 'updates',
+    clearPendingValidatedUpdate() {},
+    setUpdateValidation() {},
+    updateValidationState: { progress: 0 },
+    updateUpload: { single: () => (_req, _res, next) => next() },
+    UpdateError,
+    generatedUploadPath() { throw new Error('Should not resolve a missing upload.'); },
+    verifyUpdatePackage() { verified = true; },
+    removeTemporaryUpload: async () => {},
+  };
+  vm.runInNewContext(source.slice(start, end), context);
+  const req = { session: { user: { id: 8 } } };
+  const res = {
+    statusCode: 200,
+    status(code) { this.statusCode = code; return this; },
+    json(value) { this.body = value; return this; },
+  };
+  for (const middleware of handlers.slice(0, -1)) {
+    await new Promise((resolve, reject) => {
+      try {
+        middleware(req, res, error => error ? reject(error) : resolve());
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+  await handlers.at(-1)(req, res, error => { throw error; });
+  assert.equal(res.statusCode, 400);
+  assert.equal(verified, false);
+  assert.equal(context.updateValidationBusy, false);
+});
+
 test('update preflight rejects invalid code and tests database and disk readiness before backup', async () => {
   await temporaryDirectory(async (directory) => {
     const calls = [];

@@ -131,7 +131,7 @@ function rememberSignature(signatures, signature) {
   if (signatures.size > 64) signatures.delete(signatures.values().next().value);
 }
 function requestSignature(value) {
-  return crypto.createHmac('sha256', signatureKey).update(JSON.stringify(value)).digest('hex');
+  return crypto.scryptSync(JSON.stringify(value), signatureKey, 32).toString('hex');
 }
 function databaseSignature(body) {
   return requestSignature(validateDatabase(body));

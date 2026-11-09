@@ -16,8 +16,23 @@ const seo = {
 };
 
 test('site options validate translations, colors and SEO while preserving omitted settings', () => {
-  assert.deepEqual(normalizeSiteOptions({ support, seo }, {}), { support, seo });
+  const normalized = normalizeSiteOptions({ support, seo }, {});
+  assert.deepEqual(JSON.parse(JSON.stringify(normalized)), { support, seo });
+  assert.equal(Object.getPrototypeOf(normalized.support.translations), null);
   assert.deepEqual(normalizeSiteOptions({}, { support, seo }), { support, seo });
+});
+
+test('support translations are stored in a prototype-free map', () => {
+  const translations = JSON.parse('{"en":{"title":"Help","description":"Ask us","button":"Contact"}}');
+  const normalized = normalizeSiteOptions({ support: { ...support, translations } }, {});
+  assert.equal(Object.getPrototypeOf(normalized.support.translations), null);
+  assert.equal(normalized.support.translations.en.title, 'Help');
+  assert.throws(
+    () => normalizeSiteOptions({
+      support: { ...support, translations: JSON.parse('{"__proto__":{"title":"x"}}') },
+    }, {}),
+    error => error.status === 400,
+  );
 });
 
 test('support card visibility defaults to enabled and validates the saved toggle', () => {

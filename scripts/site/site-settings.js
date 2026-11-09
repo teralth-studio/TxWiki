@@ -39,22 +39,17 @@ function normalizeSiteOptions(input, oldSite) {
     if (!support || typeof support !== 'object' || Array.isArray(support)) invalid('Revisa el bloque de soporte.');
     if (support.enabled !== undefined && typeof support.enabled !== 'boolean')
       invalid('Revisa si el bloque de soporte está habilitado.');
-    const translations = {};
+    const translations = Object.create(null);
     if (!support.translations || typeof support.translations !== 'object' || Array.isArray(support.translations))
       invalid('Revisa las traducciones del bloque de soporte.');
     for (const [locale, item] of Object.entries(support.translations)) {
       if (!/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(locale) || !item || typeof item !== 'object' || Array.isArray(item))
         invalid('Revisa las traducciones del bloque de soporte.');
-      Object.defineProperty(translations, locale, {
-        configurable: true,
-        enumerable: true,
-        value: {
-          title: text(item.title, 120, 'el título de soporte'),
-          description: text(item.description, 500, 'la descripción de soporte'),
-          button: text(item.button, 80, 'el texto del botón'),
-        },
-        writable: true,
-      });
+      translations[locale] = {
+        title: text(item.title, 120, 'el título de soporte'),
+        description: text(item.description, 500, 'la descripción de soporte'),
+        button: text(item.button, 80, 'el texto del botón'),
+      };
     }
     if (Object.keys(translations).length > 100) invalid('Hay demasiadas traducciones de soporte.');
     const color = (value) => {

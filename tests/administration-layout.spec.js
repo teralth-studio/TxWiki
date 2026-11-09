@@ -44,6 +44,55 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test('editor markup keeps external-link fields inert and rejects unsafe link protocols', async ({ page }) => {
+  await page.goto(`${origin}/admin`);
+  const result = await page.evaluate(() => {
+    const unsafeTitle = '<img src=x onerror=window.__editorXss=true>';
+    const encoded = encodeURIComponent(unsafeTitle);
+    const markup =
+      `[external-link-v2 title="${encoded}" description="" url="${encodeURIComponent('javascript:alert(1)')}" target="blank"]` +
+      '[/external-link-v2]' +
+      '[external-link title="&lt;img src=x onerror=window.__editorXss=true&gt;" description="" url="javascript:alert(1)" target="blank"][/external-link]';
+    const holder = document.createElement('div');
+    holder.innerHTML = window.editorHtmlFromMarkup(markup);
+    const unsafe = document.createElement('div');
+    unsafe.innerHTML = window.editorHtmlFromMarkup(
+      '<script>window.__editorXss=true</script>' +
+      '<img src="javascript:alert(1)" onerror="window.__editorXss=true">' +
+      '<svg onload="window.__editorXss=true"><text>unsafe</text></svg>' +
+      '<a href="javascript:alert(1)" onclick="window.__editorXss=true">unsafe link</a>',
+    );
+    return {
+      text: holder.textContent,
+      images: holder.querySelectorAll('img').length,
+      links: [...holder.querySelectorAll('a')].map(link => ({
+        href: link.getAttribute('href'),
+        eventHandler: link.getAttribute('onerror'),
+      })),
+      unsafe: {
+        scripts: unsafe.querySelectorAll('script,svg').length,
+        eventHandlers: unsafe.querySelectorAll('[onerror],[onload],[onclick]').length,
+        imageSource: unsafe.querySelector('img')?.getAttribute('src') || null,
+        linkHref: unsafe.querySelector('a')?.getAttribute('href') || null,
+      },
+    };
+  });
+  expect(result.text).toContain('<img src=x onerror=window.__editorXss=true>');
+  expect(result.images).toBe(0);
+  expect(result.links).toHaveLength(2);
+  expect(result.links).toEqual([
+    { href: null, eventHandler: null },
+    { href: null, eventHandler: null },
+  ]);
+  expect(result.unsafe).toEqual({
+    scripts: 0,
+    eventHandlers: 0,
+    imageSource: null,
+    linkHref: null,
+  });
+  expect(await page.evaluate(() => window.__editorXss)).toBeUndefined();
+});
+
   test('users paginate in groups of 15 and controls still work on later pages', async ({ page }) => {
     const users = Array.from({ length: 166 }, (_, i) => ({
       id: i + 1, username: `User ${i + 1}`, email: `user${i + 1}@example.test`,

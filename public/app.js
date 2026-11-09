@@ -6159,15 +6159,9 @@ function editorMarkupFromHtml(html) {
         description = node.querySelector('small')?.textContent || '',
         url = node.getAttribute('href') || '',
         target = node.target === '_blank' ? 'blank' : 'same',
-        attr = (value) =>
-          String(value)
-            .replaceAll('&', '&amp;')
-            .replaceAll('"', '&quot;')
-            .replaceAll("'", '&#39;')
-            .replaceAll('<', '&lt;')
-            .replaceAll('>', '&gt;');
+        attr = (value) => encodeURIComponent(String(value));
       return (
-        '[external-link title="' +
+        '[external-link-v2 title="' +
         attr(title) +
         '" description="' +
         attr(description) +
@@ -6175,7 +6169,7 @@ function editorMarkupFromHtml(html) {
         attr(url) +
         '" target="' +
         target +
-        '"][/external-link]'
+        '"][/external-link-v2]'
       );
     }
     if (tag === 'table') {
@@ -6289,6 +6283,46 @@ function replaceNestedInlineMarkup(source) {
 }
 function editorHtmlFromMarkup(source) {
   const codeBlocks = [];
+  const decodeLegacyAttribute = (value) =>
+    value.replace(/&(?:amp|lt|gt|quot|#39);/gi, (entity) => ({
+      '&amp;': '&',
+      '&lt;': '<',
+      '&gt;': '>',
+      '&quot;': '"',
+      '&#39;': "'",
+    })[entity.toLowerCase()] || entity);
+  const renderExternalLink = (rawTitle, rawDescription, rawUrl, target, encoded = false) => {
+    let title = rawTitle, description = rawDescription, href = rawUrl;
+    if (encoded) {
+      try {
+        title = decodeURIComponent(title);
+        description = decodeURIComponent(description);
+        href = decodeURIComponent(href);
+      } catch {
+        return '';
+      }
+    } else {
+      title = decodeLegacyAttribute(title);
+      description = decodeLegacyAttribute(description);
+      href = decodeLegacyAttribute(href);
+    }
+    let safeHref = '';
+    try {
+      const url = new URL(href, location.origin);
+      if (['http:', 'https:', 'mailto:'].includes(url.protocol)) safeHref = url.href;
+    } catch {}
+    return (
+      '<a class="external-link-card"' +
+      (safeHref ? ' href="' + esc(safeHref) + '"' : '') +
+      ' ' +
+      (target === 'blank' ? 'target="_blank" rel="noopener noreferrer"' : '') +
+      '><i class="fa-solid fa-arrow-up-right-from-square"></i><span><strong>' +
+      esc(title) +
+      '</strong>' +
+      (description ? '<small>' + esc(description) + '</small>' : '') +
+      '</span></a>'
+    );
+  };
   let expanded = String(source)
     .replace(/\[code\s+type="([a-z0-9_-]{1,24})"\]([\s\S]*?)\[\/code\]/gi, (_, rawLanguage, rawCode) => {
       const language = codeLanguages.some(([id]) => id === rawLanguage.toLowerCase())
@@ -6315,17 +6349,12 @@ function editorHtmlFromMarkup(source) {
       return token;
     })
     .replace(
+      /\[external-link-v2 title="([^"]*)" description="([^"]*)" url="([^"]*)" target="(blank|same)"\]\[\/external-link-v2\]/gi,
+      (_, title, description, url, target) => renderExternalLink(title, description, url, target, true),
+    )
+    .replace(
       /\[external-link title="([^"]*)" description="([^"]*)" url="([^"]*)" target="(blank|same)"\]\[\/external-link\]/gi,
-      (_, title, description, url, target) =>
-        '<a class="external-link-card" href="' +
-        url +
-        '" ' +
-        (target === 'blank' ? 'target="_blank" rel="noopener noreferrer"' : '') +
-        '><i class="fa-solid fa-arrow-up-right-from-square"></i><span><strong>' +
-        title +
-        '</strong>' +
-        (description ? '<small>' + description + '</small>' : '') +
-        '</span></a>',
+      (_, title, description, url, target) => renderExternalLink(title, description, url, target),
     )
     .replace(
       /\[(info|success|warning|error)\]([\s\S]*?)\[\/\1\]/gi,
@@ -6462,10 +6491,13 @@ function editorHtmlFromMarkup(source) {
     const out = document.createElement(tag);
     if (node.hasAttribute('class')) out.className = node.getAttribute('class').slice(0, 300);
     if (tag === 'a') {
-      try {
-        const url = new URL(node.getAttribute('href') || '', location.origin);
-        if (['http:', 'https:', 'mailto:'].includes(url.protocol)) out.setAttribute('href', url.href);
-      } catch {}
+      const href = node.getAttribute('href') || '';
+      if (href) {
+        try {
+          const url = new URL(href, location.origin);
+          if (['http:', 'https:', 'mailto:'].includes(url.protocol)) out.setAttribute('href', url.href);
+        } catch {}
+      }
       if (node.getAttribute('target') === '_blank') {
         out.target = '_blank';
         out.rel = 'noopener noreferrer';
@@ -6473,10 +6505,12 @@ function editorHtmlFromMarkup(source) {
     }
     if (tag === 'img') {
       const src = node.getAttribute('src') || '';
-      try {
-        const url = new URL(src, location.origin);
-        if (['http:', 'https:'].includes(url.protocol)) out.src = url.href;
-      } catch {}
+      if (src) {
+        try {
+          const url = new URL(src, location.origin);
+          if (['http:', 'https:'].includes(url.protocol)) out.src = url.href;
+        } catch {}
+      }
       for (const key of ['alt', 'title', 'width', 'height'])
         if (node.hasAttribute(key)) out.setAttribute(key, node.getAttribute(key).slice(0, 500));
     }

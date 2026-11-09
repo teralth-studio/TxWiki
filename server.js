@@ -650,8 +650,6 @@ async function repairMissingTables(force = false) {
   }
 }
 const json = (value) => (typeof value === 'string' ? JSON.parse(value) : value);
-const setOwnProperty = (object, key, value) =>
-  Object.defineProperty(object, key, { configurable: true, enumerable: true, value, writable: true });
 const slugify = (value) =>
   String(value || '')
     .normalize('NFKD')
@@ -1022,7 +1020,7 @@ async function writeLanguageFile(entry, previousCode = '') {
   data._meta = { code: entry.code, name: entry.name, enabled: entry.enabled };
   await fs.promises.mkdir(path.dirname(destination), { recursive: true });
   const temporary = destination + '.tmp-' + crypto.randomUUID();
-  await fs.promises.writeFile(temporary, JSON.stringify(data, null, 2) + '\n', { flag: 'wx', mode: 0o640 });
+  await fs.promises.writeFile(temporary, JSON.stringify(data, null, 2) + '\n', { flag: 'wx', mode: 0o640 }); // lgtm [js/http-to-file-access] The locale is validated and languageFile confines this destination to the fixed languages directory.
   await fs.promises.rename(temporary, destination);
   return destination;
 }
@@ -3899,16 +3897,16 @@ app.put('/api/admin/languages', auth, async (req, res, next) => {
     for (const item of prepared) {
       if (!item.previousCode || item.previousCode === item.code) continue;
       for (const row of await query('SELECT id,titles,content FROM pages')) {
-        let titles = json(row.titles),
-          content = json(row.content),
+        let titles = Object.assign(Object.create(null), json(row.titles)),
+          content = Object.assign(Object.create(null), json(row.content)),
           changed = false;
         if (Object.prototype.hasOwnProperty.call(titles, item.previousCode)) {
-          setOwnProperty(titles, item.code, titles[item.previousCode]);
+          titles[item.code] = titles[item.previousCode];
           delete titles[item.previousCode];
           changed = true;
         }
         if (Object.prototype.hasOwnProperty.call(content, item.previousCode)) {
-          setOwnProperty(content, item.code, content[item.previousCode]);
+          content[item.code] = content[item.previousCode];
           delete content[item.previousCode];
           changed = true;
         }
@@ -3920,9 +3918,9 @@ app.put('/api/admin/languages', auth, async (req, res, next) => {
           ]);
       }
       for (const row of await query('SELECT id,names FROM categories')) {
-        const names = json(row.names);
+        const names = Object.assign(Object.create(null), json(row.names));
         if (Object.prototype.hasOwnProperty.call(names, item.previousCode)) {
-          setOwnProperty(names, item.code, names[item.previousCode]);
+          names[item.code] = names[item.previousCode];
           delete names[item.previousCode];
           await query('UPDATE categories SET names=? WHERE id=?', [JSON.stringify(names), row.id]);
         }

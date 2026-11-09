@@ -25,7 +25,8 @@ function response() {
   return {
     code: 200,
     status(value) { this.code = value; return this; },
-    set() { return this; },
+    headers: {},
+    set(name, value) { this.headers[name] = value; return this; },
     json(value) { this.body = value; return this; },
   };
 }
@@ -110,6 +111,30 @@ test('reset token is consumed atomically and old sessions are invalidated only a
   assert.equal(committed, false);
   assert.deepEqual(invalidated, [8]);
   assert.deepEqual(notified, [8]);
+});
+
+test('reset-account reveals account details only after token validity is checked', async () => {
+  let valid = false;
+  const handler = route('/api/auth/reset-account', '/api/auth/verify', {
+    loginLimiter() {},
+    hash: value => `hash:${value}`,
+    query: async (_sql, params) => {
+      assert.equal(params[0], 'hash:reset-token');
+      return valid ? [{ email: 'account@example.test' }] : [];
+    },
+  });
+  const request = { body: { token: 'reset-token' } };
+  const invalid = response();
+  await handler(request, invalid, error => { throw error; });
+  assert.equal(invalid.code, 400);
+  assert.equal(invalid.body.error, 'El enlace venció o no es válido.');
+
+  valid = true;
+  const accepted = response();
+  await handler(request, accepted, error => { throw error; });
+  assert.equal(accepted.code, 200);
+  assert.equal(accepted.body.email, 'account@example.test');
+  assert.equal(accepted.headers['Cache-Control'], 'no-store');
 });
 
 test('pending verification sessions are restricted to verification and session endpoints', () => {
