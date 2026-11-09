@@ -1,0 +1,52 @@
+{
+  "name": "teralth-wiki",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Wiki configurable con autenticación, edición e internacionalización.",
+  "main": "launcher.js",
+  "scripts": {
+    "start": "node launcher.js",
+    "build:assets": "node scripts/build-assets.js"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "bowser": "^2.11.0",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "express-mysql-session": "^3.0.3",
+    "express-rate-limit": "^8.7.3",
+    "express-session": "^1.18.1",
+    "helmet": "^8.0.0",
+    "html-minifier-terser": "^7.2.0",
+    "javascript-obfuscator": "^5.10.0",
+    "lightningcss": "^1.33.0",
+    "multer": "^2.0.0",
+    "mysql2": "^3.14.0",
+    "nodemailer": "^10.3.1",
+    "otpauth": "^9.4.0",
+    "prismjs": "^1.30.0",
+    "proxy-addr": "^2.0.8",
+    "qrcode": "^1.5.4",
+    "sanitize-html": "^2.14.0",
+    "sharp": "^0.35.5",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1"
+  },
+  "overrides": {
+    "mysql2": "$mysql2",
+    "@vercel/cli-config": {
+      "zod": "^4.6.6"
+    }
+  },
+  "devDependencies": {
+    "@fontsource-variable/dm-sans": "^5.3.0",
+    "@fontsource-variable/manrope": "^5.3.0",
+    "@fortawesome/fontawesome-free": "^7.3.1",
+    "@playwright/test": "^1.65.0",
+    "@types/node": "^26.6.6",
+    "sweetalert2": "^11.26.25"
+  }
+}
