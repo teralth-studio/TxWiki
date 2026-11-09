@@ -854,7 +854,7 @@ test('reCAPTCHA v2 waits for readiness before rendering and v3 before executing'
   }
 });
 
-test('public scripts are obfuscated and original files and source maps are not served', async () => {
+test('all public JavaScript is obfuscated and source files and maps are not served', async () => {
   const app = express();
   app.use(publicScripts, publicStaticOnly);
   app.get('/verify', sendPublicHtml('index.html'));
@@ -870,13 +870,20 @@ test('public scripts are obfuscated and original files and source maps are not s
     assert.equal(prism.headers.get('cache-control'), 'no-cache');
     const prismSource = await prism.text();
     assert.doesNotThrow(() => new vm.Script(prismSource));
+    const prismContext = { window: {} };
+    vm.runInNewContext(prismSource, prismContext);
+    const prismApi = prismContext.window.Prism;
+    assert.equal(typeof prismApi.highlight, 'function');
+    assert.match(prismApi.highlight('# comment\nkey: true\n', prismApi.languages.yaml, 'yaml'), /token/);
+    const prismOriginal = await require('../../scripts/assets/prism-bundle').prismBundle();
+    assert.notEqual(prismSource, prismOriginal);
     assert.equal((await conditionalGet(origin + '/vendor/prism/prism.js', prism.headers.get('etag'))).statusCode, 304);
-    for (const [url, file, marker] of [
-      ['/app.js', 'app.js', 'const lazySweetAlert='],
-      ['/admin-updates.js', 'admin-updates.js', 'window.TeralthAdminUpdates'],
-      ['/maintenance.js', 'maintenance.js', 'window.TeralthMaintenance'],
-      ['/installer.js', 'installer.js', 'document.addEventListener'],
-      ['/vendor/sweetalert/sweetalert2.all.min.js', path.join('vendor', 'sweetalert', 'sweetalert2.all.min.js'), 'SweetAlert2']
+    for (const [url, file] of [
+      ['/app.js', 'app.js'],
+      ['/admin-updates.js', 'admin-updates.js'],
+      ['/maintenance.js', 'maintenance.js'],
+      ['/installer.js', 'installer.js'],
+      ['/vendor/sweetalert/sweetalert2.all.min.js', path.join('vendor', 'sweetalert', 'sweetalert2.all.min.js')]
     ]) {
       const source = fs.readFileSync(path.join(__dirname, '..', '..', 'public', file), 'utf8');
       const response = await fetch(origin + url);
@@ -884,13 +891,7 @@ test('public scripts are obfuscated and original files and source maps are not s
       assert.match(response.headers.get('content-type'), /javascript/);
       assert.equal(response.headers.get('cache-control'), 'no-cache');
       const body = await response.text();
-      if (url === '/maintenance.js') {
-        assert.equal(body, source);
-        assert.ok(body.includes(marker));
-      } else if (!url.startsWith('/vendor/')) {
-        assert.notEqual(body, source);
-        assert.ok(!body.includes(marker));
-      }
+      assert.notEqual(body, source, url);
       assert.ok(!body.includes('sourceMappingURL'));
       if (url === '/app.js') {
         for (const key of ['icon', 'title', 'text', 'login', 'register', 'forgot', 'reset', 'change']) {
@@ -940,7 +941,7 @@ test('public scripts are obfuscated and original files and source maps are not s
       assert.doesNotMatch(body, /(?:src|href)="[^"]*\?v=/);
       assert.equal(fs.readFileSync(path.join(__dirname, '..', '..', 'public', file), 'utf8'), source);
     }
-    for (const url of ['/app.js.map', '/vendor/sweetalert/sweetalert2.all.min.js.map', '/assets/../app.js.map', '/app.js%2e', '/app.js%3a%24DATA', '/vendor/sweetalert/sweetalert2.all.min.js%20']) {
+    for (const url of ['/app.js.map', '/vendor/sweetalert/sweetalert2.all.min.js.map', '/vendor/unlisted.js', '/assets/../app.js.map', '/app.js%2e', '/app.js%3a%24DATA', '/vendor/sweetalert/sweetalert2.all.min.js%20']) {
       assert.equal((await fetch(origin + url)).status, 404, url);
     }
     const index = await (await fetch(origin + '/index.html')).text();

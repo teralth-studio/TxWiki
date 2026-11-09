@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const JavaScriptObfuscator = require('javascript-obfuscator');
+const { obfuscate } = require('js-confuser');
 const { minify } = require('html-minifier-terser');
 const { transform } = require('lightningcss');
 const { prismBundle } = require('./prism-bundle');
@@ -27,35 +27,14 @@ const styles = new Map([
 ]);
 const cache = new Map();
 const options = {
+  target: 'browser',
   compact: true,
-  controlFlowFlattening: true,
-  controlFlowFlatteningThreshold: 0.5,
-  deadCodeInjection: false,
-  deadCodeInjectionThreshold: 0.1,
-  identifierNamesGenerator: 'mangled-shuffled',
-  numbersToExpressions: true,
+  minify: true,
+  renameVariables: true,
   renameGlobals: true,
-  renameProperties: false,
-  selfDefending: false,
-  simplify: true,
-  sourceMap: false,
-  splitStrings: false,
-  splitStringsChunkLength: 6,
-  stringArray: true,
-  stringArrayCallsTransform: true,
-  stringArrayCallsTransformThreshold: 1,
-  stringArrayEncoding: ['rc4'],
-  stringArrayIndexShift: true,
-  stringArrayRotate: true,
-  stringArrayShuffle: true,
-  stringArrayWrappersCount: 3,
-  stringArrayWrappersChainedCalls: true,
-  stringArrayWrappersParametersMaxCount: 5,
-  stringArrayWrappersType: 'function',
-  stringArrayThreshold: 1,
-  target: 'browser-no-eval',
-  transformObjectKeys: true,
-  unicodeEscapeSequence: true,
+  stringConcealing: true,
+  controlFlowFlattening: 0.15,
+  pack: false,
 };
 
 function composeAppScript(appSource, updatesSource) {
@@ -69,6 +48,12 @@ function invalidStaticPath(pathname) {
     pathname.includes('~') ||
     pathname.split('/').some((part) => part === '.' || part === '..' || /[. ]$/.test(part))
   );
+}
+
+async function obfuscateScript(source, isolate = false) {
+  const input = isolate ? `(function(){\n${source}\n})();` : source;
+  const result = await obfuscate(input, options);
+  return result.code;
 }
 
 async function compiledAsset(file, type) {
@@ -94,19 +79,11 @@ async function compiledAsset(file, type) {
       if (type === 'css') {
         return transform({ filename: file, code: source, minify: true }).code.toString('utf8');
       }
-      // Third-party libraries are already minified, and obfuscation breaks their internal logic.
-      if (file.startsWith('vendor')) return source.toString('utf8');
-      // Keep update recovery code plain: it must remain usable while application assets are changing.
-      if (file === 'maintenance.js') return source.toString('utf8');
       if (file === 'app.js') {
         const updatesSource = await fs.promises.readFile(path.join(publicRoot, 'admin-updates.js'), 'utf8');
         source = Buffer.from(composeAppScript(source.toString('utf8'), updatesSource));
       }
-      // Isolate this in a function so obfuscated names do not collide with library globals.
-      return JavaScriptObfuscator.obfuscate(
-        '(function(){\n' + source.toString('utf8') + '\n})();',
-        options,
-      ).getObfuscatedCode();
+      return obfuscateScript(source.toString('utf8'), !file.startsWith('vendor'));
     })();
     const entry = { signature, compilation };
     cache.set(key, entry);
@@ -143,7 +120,7 @@ function publicScripts(req, res, next) {
   const key = pathname.toLowerCase();
   if (key === '/vendor/prism/prism.js') {
     if (!cache.has('prism-bundle')) {
-      const compilation = prismBundle();
+      const compilation = prismBundle().then(source => obfuscateScript(source));
       cache.set('prism-bundle', { compilation });
       compilation.catch(() => cache.delete('prism-bundle'));
     }
@@ -193,6 +170,9 @@ function publicStaticOnly(req, res, next) {
       .catch(next);
   }
   if (/\.(?:html?|css)$/i.test(pathname) && /^\/(?:assets|vendor)\//i.test(pathname)) {
+    return res.sendStatus(404);
+  }
+  if (/\.(?:js|mjs|cjs|map)$/i.test(pathname) && /^\/(?:assets|vendor|languages)\//i.test(pathname)) {
     return res.sendStatus(404);
   }
   if (
