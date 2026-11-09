@@ -218,12 +218,46 @@ jobs:
           import json
           import os
           import pathlib
+          import re
           import sys
+          from urllib.parse import unquote, urlparse
 
           directory = pathlib.Path(os.environ["SARIF_DIRECTORY"])
+          workspace = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
           sarif_files = sorted(directory.rglob("*.sarif")) if directory.exists() else []
           if not sarif_files:
               sys.exit("CodeQL did not produce SARIF results; refusing to publish.")
+
+          # Validate reviewed inline markers directly when SARIF omits suppression metadata.
+          def has_source_annotation(artifact, line, rule_id):
+              parsed = urlparse(artifact)
+              if parsed.scheme and parsed.scheme != "file":
+                  return False
+              source_name = unquote(parsed.path) if parsed.scheme == "file" else unquote(artifact)
+              source_path = pathlib.Path(source_name)
+              if not source_path.is_absolute():
+                  source_path = workspace / source_path
+              source_path = source_path.resolve()
+              try:
+                  source_path.relative_to(workspace)
+              except ValueError:
+                  return False
+              if not source_path.is_file():
+                  return False
+
+              lines = source_path.read_text(encoding="utf-8").splitlines()
+              try:
+                  finding_line = int(line)
+              except (TypeError, ValueError):
+                  return False
+              marker = re.compile(
+                  r"(?:^|\s)//\s*codeql\[" + re.escape(rule_id) + r"\](?:\s|$)"
+              )
+              return any(
+                  marker.search(lines[index])
+                  for index in (finding_line - 2, finding_line - 1)
+                  if 0 <= index < len(lines)
+              )
 
           findings = []
           source_suppressions = []
@@ -245,7 +279,10 @@ jobs:
                       line = physical.get("region", {}).get("startLine", "?")
                       rule_id = result.get("ruleId", "unknown")
                       if suppression:
-                          source_suppressions.append(f"{artifact}:{line}: {rule_id}")
+                          source_suppressions.append(f"{artifact}:{line}: {rule_id} (SARIF inSource)")
+                          continue
+                      if has_source_annotation(artifact, line, rule_id):
+                          source_suppressions.append(f"{artifact}:{line}: {rule_id} (reviewed source annotation)")
                           continue
                       findings.append(
                           f"{artifact}:{line}: {rules.get(rule_id, rule_id)}"
