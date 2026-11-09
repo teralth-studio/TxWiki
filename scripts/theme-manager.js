@@ -9,6 +9,35 @@ const sharp = require('sharp');
 
 const DEFAULT_THEME = 'default';
 const DEFAULT_THEME_ROOT = path.join(__dirname, 'default-theme');
+const DEFAULT_THEME_FILES = new Map([
+  [
+    'settings.json',
+    `${JSON.stringify({
+      name: 'Default',
+      version: '1.0.0',
+      author: 'Teralth Wiki',
+      support: '',
+      settings: [
+        { name: 'Primary Color', type: 'color', default: '#91a8ff' },
+        { name: 'Secondary Color', type: 'color', default: '#7188e8' },
+      ],
+    }, null, 2)}\n`,
+  ],
+  [
+    'theme.css',
+    `body {
+  --accent: color-mix(in srgb, var(--theme-setting-primary-color, #91a8ff) 82%, #ffffff);
+  --accent-strong: color-mix(in srgb, var(--theme-setting-secondary-color, #7188e8) 82%, #ffffff);
+}
+
+body.light {
+  --accent: color-mix(in srgb, var(--theme-setting-primary-color, #91a8ff) 76%, #20232a);
+  --accent-strong: color-mix(in srgb, var(--theme-setting-secondary-color, #7188e8) 76%, #20232a);
+}
+`,
+  ],
+]);
+let defaultThemeFilesPromise;
 const MAX_ZIP_BYTES = 25 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 20 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
@@ -422,6 +451,40 @@ async function validateThemeFiles(directory, slug) {
   return { definition, stylesheet };
 }
 
+async function ensureDefaultThemeFiles() {
+  if (!defaultThemeFilesPromise) {
+    defaultThemeFilesPromise = (async () => {
+      const parent = await fs.promises.realpath(path.dirname(DEFAULT_THEME_ROOT));
+      let directory = await findDirectoryEntry(parent, path.basename(DEFAULT_THEME_ROOT));
+      if (!directory) {
+        await fs.promises.mkdir(DEFAULT_THEME_ROOT, { mode: 0o750 });
+        directory = await findDirectoryEntry(parent, path.basename(DEFAULT_THEME_ROOT));
+      }
+      if (!directory) fail('THEME_DEFAULT_MISSING', 'The built-in Default theme folder is missing.', 500);
+      for (const [name, content] of DEFAULT_THEME_FILES) {
+        if (await findFileEntry(directory.path, name)) continue;
+        const target = path.join(directory.path, name);
+        let handle;
+        try {
+          handle = await fs.promises.open(
+            target,
+            fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | (fs.constants.O_NOFOLLOW || 0),
+            0o640,
+          );
+          await handle.writeFile(content);
+          await handle.sync();
+        } catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+        } finally {
+          await handle?.close();
+        }
+      }
+      return directory;
+    })();
+  }
+  return defaultThemeFilesPromise;
+}
+
 async function installThemeZip(buffer, themesRoot) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 22 || buffer.length > MAX_ZIP_BYTES)
     fail('THEME_ZIP_SIZE_INVALID', 'The theme ZIP must be between 22 bytes and 25 MB.');
@@ -491,12 +554,8 @@ async function installThemeZip(buffer, themesRoot) {
 
 async function readThemeDefinition(themesRoot, slug) {
   if (!safeThemeSlug(slug)) fail('THEME_NOT_FOUND', 'Theme not found.', 404);
-  // Default is shipped with the application and must never be read from the
-  // writable themes directory. Legacy themes/default folders are ignored.
   if (slug === DEFAULT_THEME) {
-    const root = path.dirname(DEFAULT_THEME_ROOT);
-    const found = await findDirectoryEntry(root, path.basename(DEFAULT_THEME_ROOT));
-    if (!found) fail('THEME_DEFAULT_MISSING', 'The built-in Default theme is missing.', 500);
+    const found = await ensureDefaultThemeFiles();
     return validateThemeFiles(found.path, DEFAULT_THEME);
   }
   const root = await fs.promises.realpath(themesRoot);
@@ -550,9 +609,7 @@ async function readThemeAsset(themesRoot, slug, rawAssetPath) {
   if (relative !== 'theme.css' && relative !== 'preview.png' && !ASSET_EXTENSIONS.has(path.extname(relative).toLowerCase())) return null;
   let directory;
   if (slug === DEFAULT_THEME) {
-    const root = path.dirname(DEFAULT_THEME_ROOT);
-    const found = await findDirectoryEntry(root, path.basename(DEFAULT_THEME_ROOT));
-    if (!found) return null;
+    const found = await ensureDefaultThemeFiles();
     directory = found.path;
   } else {
     const root = await fs.promises.realpath(themesRoot);

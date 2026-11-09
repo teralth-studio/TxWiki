@@ -4,13 +4,14 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 
 const require = createRequire(path.join(process.cwd(), 'playwright.config.js'));
-const { publicScripts } = require(path.join(process.cwd(), 'scripts', 'public-scripts.js'));
+const { publicScripts, sendStandaloneUpdaterHtml } = require(path.join(process.cwd(), 'scripts', 'public-scripts.js'));
 let server;
 let origin;
 
 test.beforeAll(async () => {
   const app = express();
   app.get('/', (req, res) => res.send('<!doctype html><html><head><link rel="stylesheet" href="/styles.css"></head><body><main id="updates"></main></body></html>'));
+  app.get('/admin/updates', sendStandaloneUpdaterHtml());
   app.use(express.static(path.join(process.cwd(), 'public')));
   app.use(publicScripts);
   await new Promise((resolve) => {
@@ -108,6 +109,33 @@ test('updates page keeps manual installation available when no newer release exi
   await expect(page.locator('#applyAutomaticUpdate')).toBeDisabled();
   await expect(page.locator('#siteUpdateFile')).toBeVisible();
   await expect(page.locator('#applySiteUpdate')).toBeEnabled();
+});
+
+test('the updater opens as a separate page without wiki administration navigation', async ({ page }) => {
+  await page.route('**/api/auth/me', route => route.fulfill({
+    json: {
+      user: { username: 'Admin', role: 'administrator', permissions: ['updates.install'] },
+      csrfToken: 'test-token',
+    },
+  }));
+  await page.route('**/api/admin/updates/latest', route => route.fulfill({
+    json: { currentVersion: '1.2.0', latestVersion: '1.4.0', available: true, versionsBehind: 2, assetAvailable: true },
+  }));
+  await page.route('**/api/admin/updates', route => route.fulfill({
+    json: { currentVersion: '1.2.0', configured: true, updates: [] },
+  }));
+  await page.route('**/api/admin/updates/validation-progress', route => route.fulfill({
+    json: { active: false, progress: 0, stage: 'idle', phase: 'preparation', phaseProgress: 0 },
+  }));
+  await page.route('**/api/updates/progress', route => route.fulfill({
+    json: { active: false, progress: 0, stage: 'idle', phase: 'preparation', phaseProgress: 0 },
+  }));
+
+  await page.goto(`${origin}/admin/updates`);
+  await expect(page.locator('.standalone-updater-shell')).toBeVisible();
+  await expect(page.locator('#updateReleaseStatus')).toContainText('2 versions behind');
+  await expect(page.locator('#adminNavigation')).toHaveCount(0);
+  await expect(page.locator('.update-phase-list > li')).toHaveCount(4);
 });
 
 test('update progress places phase cards left of the overall ring and tracks each phase', async ({ page }) => {

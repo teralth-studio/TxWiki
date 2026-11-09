@@ -29,7 +29,12 @@ const { createSiteRateLimiter } = require('./scripts/site-rate-limit');
 const { senderEmailAddress, validEmailAddress } = require('./scripts/auth/email-address');
 const { loginDetails } = require('./scripts/login-details');
 const { registerTwoFactorRoutes, binding: twoFactorBinding, sessionBinding: twoFactorSessionBinding, LIFETIME: TWO_FACTOR_LIFETIME } = require('./scripts/two-factor');
-const { publicScripts, publicStaticOnly, sendPublicHtml } = require('./scripts/public-scripts');
+const {
+  publicScripts,
+  publicStaticOnly,
+  sendPublicHtml,
+  sendStandaloneUpdaterHtml,
+} = require('./scripts/public-scripts');
 const { normalizeSiteOptions, normalizeSupportUrl } = require('./scripts/site-settings');
 const { HEADER_LINK_LIMIT, normalizeHeaderLink, normalizeHeaderLinks } = require('./scripts/header-links');
 const { migrateSitePermissions } = require('./scripts/role-permissions');
@@ -5202,6 +5207,19 @@ const sendAppIndex = sendPublicHtml('index.html', async (html, req) => {
 });
 app.get(['/login', '/register', '/reset', '/verify'], sendAppIndex);
 const adminPanelPermissions = ['admin.view'];
+const sendUpdaterPage = sendStandaloneUpdaterHtml();
+app.get('/admin/updates', async (req, res, next) => {
+  if (!req.session.user) return res.redirect(303, '/login?next=%2Fadmin%2Fupdates');
+  try {
+    const [current] = await query('SELECT must_change_password FROM users WHERE id=?', [req.session.user.id]);
+    if (!current) return res.redirect(303, '/login?next=%2Fadmin%2Fupdates');
+    if (current.must_change_password) return res.redirect(303, '/change-password');
+    if (!(await canUser(req.session.user.id, 'updates.install'))) return res.sendStatus(404);
+    return sendUpdaterPage(req, res, next);
+  } catch (error) {
+    next(error);
+  }
+});
 app.get(/^\/admin(?:\/.*)?$/, async (req, res, next) => {
   if (!req.session.user) return res.redirect(303, '/login?next=%2Fadmin');
   try {

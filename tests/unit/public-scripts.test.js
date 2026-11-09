@@ -5,7 +5,13 @@ const path = require('node:path');
 const { test } = require('node:test');
 const vm = require('node:vm');
 const express = require('express');
-const { composeAppScript, publicScripts, publicStaticOnly, sendPublicHtml } = require('../../scripts/public-scripts');
+const {
+  composeAppScript,
+  publicScripts,
+  publicStaticOnly,
+  sendPublicHtml,
+  sendStandaloneUpdaterHtml,
+} = require('../../scripts/public-scripts');
 
 function conditionalGet(url, etag) {
   return new Promise((resolve, reject) => {
@@ -44,6 +50,29 @@ test('served obfuscated app bundle exposes the updates renderer', async () => {
   app.use(publicScripts);
   const server = await new Promise(resolve => {
     const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
+  });
+
+  test('standalone updater uses its own page shell and the existing update assets', async () => {
+    const app = express();
+    app.get('/admin/updates', sendStandaloneUpdaterHtml());
+    const server = await new Promise(resolve => {
+      const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
+    });
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/admin/updates`);
+      const body = await response.text();
+      assert.equal(response.status, 200);
+      assert.match(body, /id="updateApp"/);
+      assert.match(body, /src="\/admin-updates\.js"/);
+      assert.match(body, /href="\/maintenance\.css"/);
+      assert.match(body, /href="\/styles\.css"/);
+      assert.doesNotMatch(body, /id="adminNavigation"/);
+      assert.doesNotMatch(body, /id="maintenanceTitle"/);
+    } finally {
+      await new Promise((resolve, reject) =>
+        server.close(error => error ? reject(error) : resolve()),
+      );
+    }
   });
   try {
     const response = await fetch(`http://127.0.0.1:${server.address().port}/app.js`);

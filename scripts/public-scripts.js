@@ -108,6 +108,38 @@ function sendPublicHtml(file, transformHtml) {
   };
 }
 
+function sendStandaloneUpdaterHtml() {
+  return sendPublicHtml('maintenance.html', (html) => {
+    const assets =
+      '<link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">' +
+      '<link rel="stylesheet" href="/styles.css">' +
+      '<link rel="stylesheet" href="/vendor/sweetalert/sweetalert2.min.css">' +
+      '<script src="/vendor/sweetalert/sweetalert2.all.min.js" defer></script>' +
+      '<script src="/admin-updates.js" defer></script>';
+    const body =
+      '<body class="maintenance-body standalone-updater-page">' +
+      '<main class="standalone-updater-shell">' +
+      '<header class="standalone-updater-header">' +
+      '<a class="standalone-updater-brand" href="/admin"><span aria-hidden="true">T</span><strong>Teralth Studio</strong></a>' +
+      '<div class="standalone-updater-title"><h1 data-es="Actualizador" data-en="System updater">System updater</h1>' +
+      '<p data-es="Actualiza el sistema desde una página independiente." data-en="Update the system from this separate page.">Update the system from this separate page.</p></div>' +
+      '<div class="standalone-updater-actions"><button class="standalone-updater-language" id="updateLanguageToggle" type="button">ES</button>' +
+      '<a class="standalone-updater-back" href="/admin"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> <span data-es="Volver a administración" data-en="Back to administration">Back to administration</span></a></div>' +
+      '</header><div class="standalone-updater-error" id="updatePageError" role="alert" hidden></div>' +
+      '<div class="standalone-updater-content" id="updateApp"></div></main>';
+    html = html.replace(/<title>[^<]*<\/title>/i, '<title>System updater</title>');
+    const headEnd = html.toLowerCase().indexOf('</head>');
+    if (headEnd < 0) throw new Error('The standalone updater page template is invalid.');
+    html = html.slice(0, headEnd) + assets + html.slice(headEnd);
+    const bodyStart = html.toLowerCase().indexOf('<body');
+    const bodyOpenEnd = html.indexOf('>', bodyStart);
+    const bodyEnd = html.toLowerCase().lastIndexOf('</body>');
+    if (bodyStart < 0 || bodyOpenEnd < 0 || bodyEnd < 0)
+      throw new Error('The standalone updater page template is invalid.');
+    return html.slice(0, bodyStart) + body + html.slice(bodyEnd);
+  });
+}
+
 function publicScripts(req, res, next) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return next();
   let pathname;
@@ -198,4 +230,10 @@ const publicStatic = express.static(publicRoot, {
   },
 });
 
-module.exports = { composeAppScript, publicScripts, publicStaticOnly, sendPublicHtml };
+module.exports = {
+  composeAppScript,
+  publicScripts,
+  publicStaticOnly,
+  sendPublicHtml,
+  sendStandaloneUpdaterHtml,
+};

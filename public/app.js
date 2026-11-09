@@ -2239,9 +2239,13 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
     (button) =>
       (button.onclick = async () => {
         if (!(await confirmUnsaved())) return;
-        closeMobileNav();
-        await adminView(button.dataset.tab);
-      }),
+      if (button.dataset.tab === 'updates') {
+        location.assign('/admin/updates');
+        return;
+      }
+      closeMobileNav();
+      await adminView(button.dataset.tab);
+    }),
   );
   const content = $('#adminContent');
   try {

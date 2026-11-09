@@ -459,3 +459,72 @@ function uploadPackage(form, csrf, onProgress) {
     request.send(form);
   });
 }
+
+if (typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.getElementById('updateApp')) {
+  const root = document.getElementById('updateApp');
+  const errorBox = document.getElementById('updatePageError');
+  let language = localStorage.getItem('wiki-language')?.toLowerCase().startsWith('es') ? 'es' : 'en';
+  let csrf = '';
+  const t = (spanish, english) => (language === 'es' ? spanish : english);
+  const esc = (value) =>
+    String(value ?? '').replace(/[&<>"']/g, (char) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char],
+    );
+  const showError = (_target, error) => {
+    errorBox.textContent = error.message || String(error);
+    errorBox.hidden = false;
+  };
+  const api = async (url, options = {}) => {
+    const headers = {
+      ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
+      ...(options.headers || {}),
+    };
+    const response = await fetch(url, { credentials: 'same-origin', ...options, headers });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(body.error || t('Ocurrió un error.', 'Something went wrong.'));
+      error.status = response.status;
+      throw error;
+    }
+    return body;
+  };
+  const renderLanguage = () => {
+    document.documentElement.lang = language;
+    document.title = t('Actualizador del sistema', 'System updater');
+    document.querySelectorAll('[data-es][data-en]').forEach((element) => {
+      element.textContent = element.dataset[language];
+    });
+    document.getElementById('updateLanguageToggle').textContent = language === 'es' ? 'EN' : 'ES';
+  };
+  document.getElementById('updateLanguageToggle').addEventListener('click', () => {
+    language = language === 'es' ? 'en' : 'es';
+    localStorage.setItem('wiki-language', language);
+    renderLanguage();
+  });
+  if (localStorage.getItem('wiki-theme') === 'light') document.body.classList.add('light');
+  renderLanguage();
+  (async () => {
+    const session = await api('/api/auth/me');
+    if (!session.user) {
+      location.assign('/login?next=%2Fadmin%2Fupdates');
+      return;
+    }
+    csrf = session.csrfToken;
+    const user = session.user;
+    const hasPermission = user.isPrimaryAdmin || user.role === 'administrator' ||
+      user.permissions?.includes('updates.install');
+    if (!hasPermission) throw new Error(t('No tienes permiso para instalar actualizaciones.', 'You do not have permission to install updates.'));
+    const canManageBackups = user.isPrimaryAdmin || user.role === 'administrator' ||
+      ['backups.import', 'backups.export', 'backups.schedule'].some((permission) => user.permissions?.includes(permission));
+    await window.TeralthAdminUpdates.render(root, {
+      api,
+      t,
+      esc,
+      showError,
+      csrf,
+      canManageBackups,
+      navigate: (tab) => location.assign(`/admin/${tab}?space=main`),
+    });
+  })().catch((error) => showError(root, error));
+}

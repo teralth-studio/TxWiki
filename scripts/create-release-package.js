@@ -84,7 +84,10 @@ async function createReleasePackage({
 }) {
   const installationFiles = await collectInstallationFiles(projectRoot);
   const files = installationFiles.filter(
-    file => safeFilePath(file) && !file.endsWith('.test.js'),
+    file =>
+      safeFilePath(file) &&
+      !file.endsWith('.test.js') &&
+      !file.startsWith('scripts/default-theme/'),
   );
   if (!files.length) throw new Error('No update-compatible application files were found.');
   return createUpdatePackage({
