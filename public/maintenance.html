@@ -41,6 +41,43 @@
       <p class="maintenance-stage" id="maintenanceStage" role="status" aria-live="polite">
         Preparing the update...
       </p>
+      <div class="maintenance-current-phase">
+        <span id="maintenanceCurrentPhase">Preparation</span>
+        <strong id="maintenanceCurrentPhasePercent">0%</strong>
+      </div>
+      <div
+        class="maintenance-phase-track"
+        id="maintenanceCurrentPhaseBar"
+        role="progressbar"
+        aria-label="Current phase progress"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow="0"
+      >
+        <span></span>
+      </div>
+      <ol class="maintenance-phases">
+        <li id="maintenancePhase-preparation">
+          <span>Preparation</span>
+          <small id="maintenancePhaseState-preparation">Pending</small>
+          <div class="maintenance-phase-item-track" id="maintenancePhaseBar-preparation" role="progressbar" aria-label="Preparation phase" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+        </li>
+        <li id="maintenancePhase-verification">
+          <span>Verification</span>
+          <small id="maintenancePhaseState-verification">Pending</small>
+          <div class="maintenance-phase-item-track" id="maintenancePhaseBar-verification" role="progressbar" aria-label="Verification phase" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+        </li>
+        <li id="maintenancePhase-installation">
+          <span>Installation</span>
+          <small id="maintenancePhaseState-installation">Pending</small>
+          <div class="maintenance-phase-item-track" id="maintenancePhaseBar-installation" role="progressbar" aria-label="Installation phase" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+        </li>
+        <li id="maintenancePhase-finalization">
+          <span>Finalization</span>
+          <small id="maintenancePhaseState-finalization">Pending</small>
+          <div class="maintenance-phase-item-track" id="maintenancePhaseBar-finalization" role="progressbar" aria-label="Finalization phase" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+        </li>
+      </ol>
       <span class="maintenance-rule" aria-hidden="true"></span>
       <p class="maintenance-footnote">Please keep this page open.</p>
     </main>

@@ -50,7 +50,7 @@ function startWiki() {
       stdio: 'inherit',
     });
     child.once('error', (error) => {
-      console.error('No fue posible iniciar la wiki:', error.code || error.name);
+      console.error('Could not start the wiki:', error.code || error.name);
       process.exitCode = 1;
     });
     child.once('close', (code) => {
@@ -481,14 +481,14 @@ if (isConfigured) {
         console.error('[Teralth Wiki] Installer image cleanup failed:', cleanupError.code || cleanupError.name));
       const userError = error instanceof SetupInputError || error.code === 'SETUP_IMAGE_INVALID';
       if (res.headersSent) {
-        if (!userError) console.error('No fue posible completar la instalación:', error.code || error.name || 'Error');
+        if (!userError) console.error('Could not complete the installation:', error.code || error.name || 'Error');
         return res.end(JSON.stringify({
           error: userError ? error.message : 'No se pudo completar la instalación. Revisa la consola del servidor.',
           status: userError ? 400 : 500,
         }) + '\n');
       }
       if (userError) return res.status(400).json({ error: error.message });
-      console.error('No fue posible completar la instalación:', error.code || error.name || 'Error');
+      console.error('Could not complete the installation:', error.code || error.name || 'Error');
       res.status(500).json({
         error:
           'No se pudo validar MySQL o guardar la configuración. Revisa los datos de conexión y los permisos del servidor.',
@@ -503,7 +503,7 @@ if (isConfigured) {
   app.get('/assets/fonts/:filename', publicStaticOnly);
   app.use((req, res, next) => (req.method === 'GET' ? res.redirect('/') : next()));
   app.use((error, req, res, next) => {
-    console.error('Solicitud del instalador rechazada:', error.status || error.code || error.name || 'Error');
+    console.error('Installer request rejected:', error.status || error.code || error.name || 'Error');
     if (!res.headersSent)
       res.status(error.status || 500).json({ error: 'No se pudo procesar la solicitud del instalador.' });
   });
@@ -513,7 +513,7 @@ if (isConfigured) {
     (process.env.NODE_ENV === 'production' || process.env.P_SERVER_UUID ? '0.0.0.0' : '127.0.0.1');
   const installerServer = app.listen(port, host, () =>
     console.log(
-      `Instalador Teralth Studio disponible en ${host}:${port}. Consulta el archivo setup.key para autorizar la instalación.`,
+      `Teralth Studio installer available at ${host}:${port}. See setup.key to authorize installation.`,
     ),
   );
 }

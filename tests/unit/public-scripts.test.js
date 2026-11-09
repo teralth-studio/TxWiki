@@ -246,8 +246,28 @@ test('update admin page validates the selected package before opening maintenanc
   const button = { disabled: false };
   const uploaded = [];
   const sequence = [];
+  const elements = new Map();
+  const makeElement = () => ({
+    disabled: false,
+    className: '',
+    innerHTML: '',
+    textContent: '',
+    style: {},
+    attributes: {},
+    classList: { add() {}, remove() {}, toggle() {} },
+    firstElementChild: { style: {} },
+    addEventListener() {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+    getAttribute(name) { return this.attributes[name]; },
+    querySelector() { return { textContent: '' }; },
+  });
+  const getElement = (selector) => {
+    if (!elements.has(selector)) elements.set(selector, makeElement());
+    return elements.get(selector);
+  };
   const progressBar = {
     attributes: {},
+    firstElementChild: { style: {} },
     setAttribute(name, value) { this.attributes[name] = value; },
     getAttribute(name) { return this.attributes[name]; },
   };
@@ -257,7 +277,6 @@ test('update admin page validates the selected package before opening maintenanc
   };
   const progressStage = { textContent: '' };
   const progressPercent = { textContent: '' };
-  const progressFill = { style: {} };
   const errorBox = { hidden: true, textContent: '' };
   class MockRequest {
     constructor() {
@@ -293,9 +312,9 @@ test('update admin page validates the selected package before opening maintenanc
       if (selector === '#updateValidationStage') return progressStage;
       if (selector === '#updateValidationPercent') return progressPercent;
       if (selector === '#updateValidationBar') return progressBar;
-      if (selector === '#updateValidationFill') return progressFill;
       if (selector === '.update-validation-error') return errorBox;
-      return null;
+      if (selector.startsWith('[data-update-phase=')) return makeElement();
+      return getElement(selector);
     },
   };
   const requests = [];
@@ -316,6 +335,14 @@ test('update admin page validates the selected package before opening maintenanc
       requests.push([url, options]);
       if (url === '/api/admin/updates/validation-progress')
         return { active: false, progress: 0, stage: 'idle' };
+      if (url === '/api/admin/updates/latest')
+        return {
+          currentVersion: '1.0.0',
+          latestVersion: '1.0.0',
+          available: false,
+          versionsBehind: 0,
+          assetAvailable: true,
+        };
       if (url === '/api/admin/updates/install') {
         sequence.push('install');
         return { ok: true };
@@ -327,7 +354,7 @@ test('update admin page validates the selected package before opening maintenanc
     showError: (_target, error) => { throw error; },
     csrf: 'csrf-token',
   });
-  assert.match(root.innerHTML, /Site updates/);
+  assert.match(root.innerHTML, /Update/);
   assert.match(root.innerHTML, /1\.0\.0/);
   assert.match(root.innerHTML, /id="updateValidation"/);
   assert.doesNotMatch(root.innerHTML, /updateValidationNote/);
@@ -340,8 +367,8 @@ test('update admin page validates the selected package before opening maintenanc
   assert.deepEqual(JSON.parse(install[1].body), { token: 'validated-token' });
   assert.deepEqual(sequence, ['validate', 'maintenance', 'install']);
   assert.equal(progress.hidden, false);
-  assert.equal(progressPercent.textContent, '100%');
-  assert.equal(progressStage.textContent, 'Validation complete. Preparing maintenance…');
+  assert.equal(progressPercent.textContent, '45%');
+  assert.equal(progressStage.textContent, 'Verification complete. Starting installation…');
   assert.equal(button.disabled, true);
   assert.equal(alerts.length, 1);
 });

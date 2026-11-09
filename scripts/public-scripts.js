@@ -94,7 +94,7 @@ async function compiledAsset(file, type) {
       if (type === 'css') {
         return transform({ filename: file, code: source, minify: true }).code.toString('utf8');
       }
-      // Las librerías de terceros ya vienen minificadas y la ofuscación rompe su lógica interna.
+      // Third-party libraries are already minified, and obfuscation breaks their internal logic.
       if (file.startsWith('vendor')) return source.toString('utf8');
       // Keep update recovery code plain: it must remain usable while application assets are changing.
       if (file === 'maintenance.js') return source.toString('utf8');
@@ -102,7 +102,7 @@ async function compiledAsset(file, type) {
         const updatesSource = await fs.promises.readFile(path.join(publicRoot, 'admin-updates.js'), 'utf8');
         source = Buffer.from(composeAppScript(source.toString('utf8'), updatesSource));
       }
-      // Se aísla en una función para que los nombres ofuscados no choquen con globales de librerías.
+      // Isolate this in a function so obfuscated names do not collide with library globals.
       return JavaScriptObfuscator.obfuscate(
         '(function(){\n' + source.toString('utf8') + '\n})();',
         options,

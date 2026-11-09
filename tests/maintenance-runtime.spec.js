@@ -31,6 +31,13 @@ test('maintenance screen initializes and updates progress', async ({ page }) => 
     .poll(() => page.evaluate(() => typeof window.TeralthMaintenance?.enter))
     .toBe('function');
   await page.evaluate(() => window.TeralthMaintenance.enter());
-  await expect(page.locator('#maintenancePercent')).toHaveText('3%');
-  await expect(page.locator('#maintenanceStage')).toHaveText('Receiving the update package...');
+  await expect(page.locator('#maintenancePercent')).toHaveText('0%');
+  await expect(page.locator('#maintenanceStage')).toHaveText('Preparing the environment…');
+  await expect(page.locator('.maintenance-phases li')).toHaveCount(4);
+  await page.evaluate(() =>
+    window.TeralthMaintenance.setProgress(56, 'staging', 'installation', 34),
+  );
+  await expect(page.locator('#maintenancePercent')).toHaveText('56%');
+  await expect(page.locator('#maintenanceCurrentPhase')).toHaveText('Installation');
+  await expect(page.locator('#maintenanceCurrentPhaseBar')).toHaveAttribute('aria-valuenow', '34');
 });

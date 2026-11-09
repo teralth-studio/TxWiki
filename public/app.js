@@ -2052,7 +2052,7 @@ function watchPassword(form) {
     current = form.querySelector('#rotateCurrent,#currentPassword'),
     submit = form.querySelector('button[type=submit],button:not([type])');
   if (!pass || !confirm || !submit)
-    throw new Error('No se encontraron los campos del formulario de contraseña.');
+    throw new Error('Password form fields were not found.');
   const update = () => {
     const checks = checkPassword(pass.value, confirm.value);
     $$('[data-check]', form).forEach((el) => {
@@ -2214,7 +2214,15 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
     if (tab === 'logs') await logsTab(content);
     if (tab === 'updates') {
       const updatesModule = await loadAdminUpdatesModule();
-      await updatesModule.render(content, { api, t, esc, showError, csrf: state.csrf });
+      await updatesModule.render(content, {
+        api,
+        t,
+        esc,
+        showError,
+        csrf: state.csrf,
+        navigate: (nextTab) => adminView(nextTab),
+        canManageBackups: canAny(['backups.import', 'backups.export', 'backups.schedule']),
+      });
     }
     if (tab === 'pages') await pagesTab(content);
     if (tab === 'categories') await categoriesTab(content);
@@ -6707,7 +6715,7 @@ async function promptSpoilerTitle(value = '') {
     cancelButtonText: t('Cancelar', 'Cancel'),
     didOpen: (popup) => {
       const input = popup.querySelector('[data-spoiler-title]');
-      if (!input) throw new Error('No se encontró el campo de texto del spoiler.');
+      if (!input) throw new Error('Spoiler title field was not found.');
       input.value = value;
       input.focus();
     },

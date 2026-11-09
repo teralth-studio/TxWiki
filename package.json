@@ -2,7 +2,7 @@
   "name": "teralth-wiki",
   "version": "1.2.0",
   "private": true,
-  "description": "Wiki configurable con autenticación, edición e internacionalización.",
+  "description": "Configurable wiki with authentication, editing, and internationalization.",
   "main": "launcher.js",
   "scripts": {
     "start": "node launcher.js",

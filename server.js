@@ -32,6 +32,11 @@ const { migrateSitePermissions } = require('./scripts/role-permissions');
 const { createAdminAuditMiddleware } = require('./scripts/admin-audit-log');
 const { createUpdateMaintenance } = require('./scripts/update-maintenance');
 const {
+  countVersionsBehind,
+  downloadReleasePackage,
+  getLatestRelease,
+} = require('./scripts/updates/github-releases');
+const {
   UpdateError,
   applyUpdatePackage,
   compareVersions,
@@ -52,17 +57,17 @@ const {
 } = require('./scripts/backup-cron');
 
 const required = ['SESSION_SECRET', 'DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME', 'ADMIN_INITIAL_PASSWORD'];
-for (const key of required) if (!process.env[key]) throw new Error(`Falta configurar ${key} en .env`);
+for (const key of required) if (!process.env[key]) throw new Error(`Missing required .env setting: ${key}`);
 if (process.env.SESSION_SECRET.length < 32)
-  throw new Error('SESSION_SECRET debe tener al menos 32 caracteres.');
+  throw new Error('SESSION_SECRET must contain at least 32 characters.');
 if (process.env.NODE_ENV === 'production' && !process.env.BASE_URL)
-  throw new Error('BASE_URL es obligatorio en producción.');
+  throw new Error('BASE_URL is required in production.');
 if (process.env.NODE_ENV === 'production') {
   let origin;
   try {
     origin = new URL(process.env.BASE_URL);
   } catch {
-    throw new Error('BASE_URL debe ser el origen HTTPS público de la wiki.');
+    throw new Error('BASE_URL must be the public HTTPS origin of the wiki.');
   }
   if (
     origin.protocol !== 'https:' ||
@@ -73,7 +78,7 @@ if (process.env.NODE_ENV === 'production') {
     origin.hash
   )
     throw new Error(
-      'En producción, BASE_URL debe contener solo el origen HTTPS público, sin ruta, credenciales ni parámetros.',
+      'In production, BASE_URL must contain only the public HTTPS origin, without a path, credentials, or query parameters.',
     );
 }
 const app = express();
@@ -82,15 +87,61 @@ const maintenance = createUpdateMaintenance({
   page: fs.readFileSync(path.join(__dirname, 'public', 'maintenance.html')),
 });
 const updateMaintenance = maintenance.state;
-const setUpdateMaintenance = maintenance.set;
 const failUpdateMaintenance = maintenance.fail;
-const updateValidationState = { active: false, progress: 0, stage: 'idle' };
+const updateValidationState = {
+  active: false,
+  progress: 0,
+  stage: 'idle',
+  phase: 'preparation',
+  phaseProgress: 0,
+};
 let updateValidationBusy = false,
   pendingValidatedUpdate = null;
-function setUpdateValidation(stage, progress) {
-  updateValidationState.active = stage !== 'verified' && stage !== 'failed';
+function setUpdateValidation(stage, progress, phaseProgress = progress) {
+  const phases = {
+    receiving: 'preparation',
+    preparing: 'preparation',
+    verifying: 'verification',
+    preflight: 'verification',
+    verified: 'verification',
+  };
+  updateValidationState.active = stage !== 'failed' && stage !== 'idle';
   updateValidationState.stage = stage;
   updateValidationState.progress = Math.max(0, Math.min(100, Math.round(progress)));
+  if (phases[stage]) updateValidationState.phase = phases[stage];
+  updateValidationState.phaseProgress = Math.max(0, Math.min(100, Math.round(phaseProgress)));
+}
+function setUpdateMaintenance(stage, progress) {
+  if (stage === 'preflight') return maintenance.set(stage, 45, 100);
+  if (['backup', 'backup-complete', 'staging', 'installing-files', 'migrations'].includes(stage)) {
+    const phaseProgress = Math.max(0, Math.min(100, ((progress - 30) / 60) * 100));
+    const overallProgress = 45 + Math.floor((phaseProgress / 100) * 50);
+    return maintenance.set(stage, overallProgress, phaseProgress);
+  }
+  if (stage === 'finalizing') return maintenance.set(stage, 98, 0);
+  if (stage === 'complete') return maintenance.set(stage, 100, 100);
+  return maintenance.set(stage, progress);
+}
+let officialReleaseCache = { expiresAt: 0, release: null, request: null };
+async function getOfficialRelease() {
+  if (officialReleaseCache.release && officialReleaseCache.expiresAt > Date.now())
+    return officialReleaseCache.release;
+  if (!officialReleaseCache.request) {
+    officialReleaseCache.request = getLatestRelease()
+      .then((release) => {
+        officialReleaseCache = {
+          expiresAt: Date.now() + 5 * 60 * 1000,
+          release,
+          request: null,
+        };
+        return release;
+      })
+      .catch((error) => {
+        officialReleaseCache = { expiresAt: 0, release: null, request: null };
+        throw error;
+      });
+  }
+  return officialReleaseCache.request;
 }
 function clearPendingValidatedUpdate() {
   if (!pendingValidatedUpdate) return;
@@ -194,7 +245,7 @@ const pool = mysql.createPool({
 pool.on('connection', (connection) =>
   connection.query("SET time_zone = '+00:00'", (error) => {
     if (error)
-      console.error('No se pudo fijar UTC en una conexión MySQL:', error.code || error.name || 'Error');
+      console.error('Could not set the MySQL connection time zone to UTC:', error.code || error.name || 'Error');
   }),
 );
 const store = new MySQLStore({ createDatabaseTable: true }, pool);
@@ -451,7 +502,7 @@ const imageUploadLimitValue = process.env.IMAGE_UPLOAD_MAX_MB ?? '50';
 const imageUploadLimitMb = Number(imageUploadLimitValue);
 if (!/^[1-9]\d*$/.test(imageUploadLimitValue) ||
     !Number.isSafeInteger(imageUploadLimitMb * 1024 * 1024))
-  throw new Error('IMAGE_UPLOAD_MAX_MB debe ser un número entero positivo de MB.');
+  throw new Error('IMAGE_UPLOAD_MAX_MB must be a positive integer in megabytes.');
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: imageUploadLimitMb * 1024 * 1024, files: 1 },
@@ -466,12 +517,12 @@ function uploadDiagnostics(req, res, next) {
   res.on('finish', () => {
     if (res.statusCode < 400) return;
     console.error(
-      '[Teralth Wiki] Falló una solicitud de imagen o archivo',
+      '[Teralth Wiki] Image or file request failed',
       JSON.stringify({
         method: req.method,
         path: req.path,
         status: res.statusCode,
-        reason: reason || 'La solicitud terminó con error antes de devolver un detalle JSON.',
+        reason: reason || 'The request failed before returning a JSON error detail.',
         fileBytes: /^\d+$/.test(req.get('content-length') || '') ? Number(req.get('content-length')) : null,
       }),
     );
@@ -558,7 +609,7 @@ async function ensureReactionUserForeignKey() {
       throw error;
     }
   }
-  throw Object.assign(new Error('No se pudo elegir un nombre único para la clave foránea de reacciones.'), {
+  throw Object.assign(new Error('Could not choose a unique name for the reactions foreign key.'), {
     code: 'ER_FK_DUP_NAME',
     teralthSchemaStatement:
       'ALTER TABLE reactions ADD FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL',
@@ -630,15 +681,15 @@ async function repairMissingTables(force = false) {
       missingReactionColumns.length
     ) {
       await applySchema();
-      if (missing.length) console.warn(`Se restauraron tablas MySQL faltantes: ${missing.join(', ')}`);
+      if (missing.length) console.warn(`Restored missing MySQL tables: ${missing.join(', ')}`);
       if (missingPageColumns.length)
-        console.warn(`Se restauraron columnas de páginas faltantes: ${missingPageColumns.join(', ')}`);
+        console.warn(`Restored missing page columns: ${missingPageColumns.join(', ')}`);
       if (missingSpaceColumns.length)
-        console.warn(`Se restauraron columnas de espacios faltantes: ${missingSpaceColumns.join(', ')}`);
+        console.warn(`Restored missing space columns: ${missingSpaceColumns.join(', ')}`);
       if (missingUserColumns.length)
-        console.warn(`Se restauraron columnas de usuarios faltantes: ${missingUserColumns.join(', ')}`);
+        console.warn(`Restored missing user columns: ${missingUserColumns.join(', ')}`);
       if (missingReactionColumns.length)
-        console.warn(`Se restauraron columnas de reacciones faltantes: ${missingReactionColumns.join(', ')}`);
+        console.warn(`Restored missing reaction columns: ${missingReactionColumns.join(', ')}`);
     }
     lastSchemaCheck = Date.now();
     return missing;
@@ -838,7 +889,7 @@ function encryptSmtpPassword(value) {
 function decryptSmtpPassword(value) {
   if (!value) return '';
   const [version, iv, tag, ciphertext] = String(value).split(':');
-  if (version !== 'v1') throw new Error('La contraseña SMTP guardada no se puede descifrar.');
+  if (version !== 'v1') throw new Error('The saved SMTP password cannot be decrypted.');
   const decipher = crypto.createDecipheriv('aes-256-gcm', smtpEncryptionKey(), Buffer.from(iv, 'base64url'));
   decipher.setAuthTag(Buffer.from(tag, 'base64url'));
   return Buffer.concat([decipher.update(Buffer.from(ciphertext, 'base64url')), decipher.final()]).toString(
@@ -1036,7 +1087,7 @@ async function invalidateUserSessions(userId, exceptSessionId = null) {
           (Number(data.user?.id) === Number(userId) || Number(data.pendingTwoFactor?.id) === Number(userId)))
         await query('DELETE FROM sessions WHERE session_id=?', [row.session_id]);
     } catch (error) {
-      console.error('[Teralth Wiki] No se pudo invalidar una sesión:', error.code || error.name);
+      console.error('[Teralth Wiki] Could not invalidate a session:', error.code || error.name);
       throw error;
     }
   }
@@ -1370,7 +1421,7 @@ async function initialize() {
       if (Number.isInteger(retention) && retention >= 1 && retention <= 30) backupRetentionCount = retention;
     } catch {
       console.error(
-        '[Teralth Wiki] Configuración CRON de backups inválida; se usará el valor predeterminado.',
+        '[Teralth Wiki] Invalid backup CRON configuration; using the default value.',
       );
     }
   }
@@ -1650,7 +1701,7 @@ async function pumpBackgroundJobs() {
             [job.id, lockToken],
           )
           .catch((error) =>
-            console.error('No se pudo renovar el lease de la tarea:', error.code || error.name || 'Error'),
+            console.error('Could not renew the job lease:', error.code || error.name || 'Error'),
           ),
       30_000,
     );
@@ -1685,7 +1736,7 @@ async function pumpBackgroundJobs() {
           ],
         )
         .catch((updateError) =>
-          console.error('No se pudo reprogramar una tarea:', updateError.code || updateError.name || 'Error'),
+          console.error('Could not reschedule a job:', updateError.code || updateError.name || 'Error'),
         );
       console.error(
         '[Teralth Wiki] Background job failed',
@@ -1705,14 +1756,14 @@ async function pumpBackgroundJobs() {
       query(
         "DELETE FROM background_jobs WHERE status IN ('done','failed') AND created_at<DATE_SUB(UTC_TIMESTAMP(),INTERVAL 30 DAY)",
       ).catch((error) =>
-        console.error('No se pudo limpiar la cola de tareas:', error.code || error.name || 'Error'),
+        console.error('Could not clean the job queue:', error.code || error.name || 'Error'),
       );
     }
   }
 }
 function startBackgroundJobWorker() {
   pumpBackgroundJobs().catch((error) =>
-    console.error('No se pudo iniciar la cola de tareas:', error.code || error.name || 'Error'),
+    console.error('Could not start the job queue:', error.code || error.name || 'Error'),
   );
   const timer = setInterval(
     () =>
@@ -1734,10 +1785,10 @@ function scheduleBackupJob() {
         );
         if (!pending) {
           const created = await enqueueJob('backup', null, 'scheduled-backup:' + next.toISOString());
-          if (created) console.log('Backup programado añadido a la cola.');
+          if (created) console.log('Scheduled backup added to the queue.');
         }
       } catch (error) {
-        console.error('No se pudo añadir el backup a la cola:', error.code || error.name || 'Error');
+        console.error('Could not add the backup to the queue:', error.code || error.name || 'Error');
       }
       scheduleBackupJob();
     }, delay);
@@ -2247,10 +2298,10 @@ function notifySuccessfulLogin(u, req) {
     enqueueMail(u.email, 'New sign-in', emailTemplate('login_success.html', {
       username: u.username, email: u.email, date, hour, ...loginDetails(req),
     })).catch((error) =>
-      console.error('No se pudo encolar el aviso de inicio de sesión:', error.code || error.name || 'Error'),
+      console.error('Could not queue the sign-in notification:', error.code || error.name || 'Error'),
     );
   } catch (error) {
-    console.error('No se pudo preparar el aviso de inicio de sesión:', error.code || error.name || 'Error');
+    console.error('Could not prepare the sign-in notification:', error.code || error.name || 'Error');
   }
 }
 app.post('/api/auth/login', loginLimiter, loginAccountLimiter, async (req, res, next) => {
@@ -2771,100 +2822,181 @@ app.get('/api/admin/updates', auth, requirePermission('updates.install'), async 
     next(error);
   }
 });
-app.get('/api/updates/progress', maintenance.progress);
-app.post(
-  '/api/admin/updates/validate',
-  auth,
-  requirePermission('updates.install'),
-  updateLimiter,
-  (req, res, next) => {
+app.get('/api/updates/progress', (req, res) => {
+  if (updateMaintenance.active) return maintenance.progress(req, res);
+  if (!updateValidationState.active) return maintenance.progress(req, res);
+  return res
+    .set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'X-Content-Type-Options': 'nosniff',
+    })
+    .json({
+      active: true,
+      progress: updateValidationState.progress,
+      stage: updateValidationState.stage,
+      phase: updateValidationState.phase,
+      phaseProgress: updateValidationState.phaseProgress,
+    });
+});
+app.get('/api/admin/updates/latest', auth, requirePermission('updates.install'), async (req, res, next) => {
+  try {
+    await ensureUpdateTables(pool);
+    const [history] = await pool.query('SELECT release_version FROM wiki_updates');
+    const currentVersion = history.reduce(
+      (latest, row) => (compareVersions(row.release_version, latest) > 0 ? row.release_version : latest),
+      require('./package.json').version,
+    );
+    const release = await getOfficialRelease();
+    const comparison = compareVersions(release.version, currentVersion);
+    res.set('Cache-Control', 'private, no-store').json({
+      currentVersion,
+      latestVersion: release.version,
+      releaseTag: release.tag,
+      available: comparison > 0,
+      versionsBehind: countVersionsBehind(release, currentVersion),
+      assetAvailable: Boolean(release.asset),
+      publishedAt: release.publishedAt,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+function beginUpdateValidation(stage) {
+  return (req, res, next) => {
     if (updateMaintenance.active) return res.status(409).json({ error: 'Ya hay una actualización en curso.' });
     if (updateValidationBusy)
       return res.status(409).json({ error: 'Ya se está validando otro paquete de actualización.' });
     updateValidationBusy = true;
     clearPendingValidatedUpdate();
-    setUpdateValidation('receiving', 1);
+    setUpdateValidation(stage, 0, 0);
     next();
-  },
+  };
+}
+async function validateUpdatePackage(req, res, next, file, expectedRelease = null) {
+  let connection;
+  try {
+    if (!file) { // codeql[js/user-controlled-bypass] Missing multipart input is rejected before signature verification or installation.
+      setUpdateValidation('failed', updateValidationState.progress, updateValidationState.phaseProgress);
+      return res.status(400).json({ error: 'Selecciona un paquete .zip.' });
+    }
+    setUpdateValidation('verifying', 10, 0);
+    const uploadPath = generatedUploadPath(file, updateUploadRoot, /^package-[0-9a-f-]{36}\.zip$/);
+    const pkg = await verifyUpdatePackage(uploadPath, updatePublicKey, {
+      onProgress: (progress) =>
+        setUpdateValidation('verifying', 10 + Math.floor(((progress - 8) / 10) * 22), ((progress - 8) / 10) * 100),
+    });
+    if (
+      expectedRelease &&
+      (pkg.version !== expectedRelease.version || pkg.id !== expectedRelease.tag)
+    )
+      throw new UpdateError('El paquete firmado no coincide con la release oficial consultada.', 400);
+    await ensureUpdateTables(pool);
+    const [priorUpdate] = await pool.execute('SELECT update_id FROM wiki_updates WHERE update_id=?', [pkg.id]);
+    if (priorUpdate.length) throw new UpdateError('Este paquete ya se instaló.', 409);
+    const [history] = await pool.query('SELECT release_version FROM wiki_updates');
+    const priorVersion = history.reduce(
+      (latest, row) => (compareVersions(row.release_version, latest) > 0 ? latest : row.release_version),
+      require('./package.json').version,
+    );
+    if (compareVersions(pkg.version, priorVersion) <= 0)
+      throw new UpdateError('La versión debe ser superior a la ya instalada.', 409);
+
+    setUpdateValidation('preflight', 32, 0);
+    connection = await pool.getConnection();
+    await preflightUpdatePackage(pkg, {
+      root: __dirname,
+      connection,
+      onProgress: (_stage, progress) =>
+        setUpdateValidation('preflight', 32 + Math.floor(((progress - 18) / 10) * 13), ((progress - 18) / 10) * 100),
+    });
+
+    const validationToken = crypto.randomUUID(),
+      expiry = setTimeout(() => {
+        if (pendingValidatedUpdate?.token === validationToken) {
+          pendingValidatedUpdate = null;
+          setUpdateValidation('idle', 0);
+        }
+      }, 5 * 60 * 1000);
+    expiry.unref();
+    pendingValidatedUpdate = {
+      token: validationToken,
+      userId: req.session.user.id,
+      pkg,
+      expiresAt: Date.now() + 5 * 60 * 1000,
+      expiry,
+    };
+    setUpdateValidation('verified', 45, 100);
+    res.json({ ok: true, token: validationToken, version: pkg.version });
+  } catch (error) {
+    setUpdateValidation('failed', updateValidationState.progress, updateValidationState.phaseProgress);
+    if (error instanceof UpdateError) return res.status(error.status).json({ error: error.message });
+    next(error);
+  } finally {
+    connection?.release();
+    updateValidationBusy = false;
+    await removeTemporaryUpload(file, updateUploadRoot, /^package-[0-9a-f-]{36}\.zip$/);
+  }
+}
+app.post(
+  '/api/admin/updates/validate',
+  auth,
+  requirePermission('updates.install'),
+  updateLimiter,
+  beginUpdateValidation('receiving'),
   (req, res, next) =>
     updateUpload.single('package')(req, res, (error) => {
       if (error?.code === 'LIMIT_FILE_SIZE') {
         updateValidationBusy = false;
-        setUpdateValidation('failed', updateValidationState.progress);
+        setUpdateValidation('failed', updateValidationState.progress, updateValidationState.phaseProgress);
         return res.status(413).json({ error: 'El paquete no puede superar los 64 MB.' });
       }
       if (error?.code === 'LIMIT_FILE_COUNT' || error?.code === 'LIMIT_UNEXPECTED_FILE') {
         updateValidationBusy = false;
-        setUpdateValidation('failed', updateValidationState.progress);
+        setUpdateValidation('failed', updateValidationState.progress, updateValidationState.phaseProgress);
         return res.status(400).json({ error: 'Selecciona un solo paquete .zip.' });
       }
       if (error) {
         updateValidationBusy = false;
-        setUpdateValidation('failed', updateValidationState.progress);
-        if (error instanceof UpdateError)
-          return res.status(error.status).json({ error: error.message });
+        setUpdateValidation('failed', updateValidationState.progress, updateValidationState.phaseProgress);
+        if (error instanceof UpdateError) return res.status(error.status).json({ error: error.message });
         return next(error);
       }
       next();
     }),
+  (req, res, next) => validateUpdatePackage(req, res, next, req.file),
+);
+app.post(
+  '/api/admin/updates/automatic/validate',
+  auth,
+  requirePermission('updates.install'),
+  updateLimiter,
+  beginUpdateValidation('preparing'),
   async (req, res, next) => {
-    let connection;
     try {
-      if (!req.file) { // codeql[js/user-controlled-bypass] Missing multipart input is rejected before signature verification or installation.
-        setUpdateValidation('failed', updateValidationState.progress);
-        return res.status(400).json({ error: 'Selecciona un paquete .zip.' });
-      }
-      setUpdateValidation('verifying', 8);
-      const uploadPath = generatedUploadPath(req.file, updateUploadRoot, /^package-[0-9a-f-]{36}\.zip$/);
-      const pkg = await verifyUpdatePackage(uploadPath, updatePublicKey, {
-        onProgress: (progress) => setUpdateValidation('verifying', 8 + Math.floor((progress / 18) * 62)),
-      });
+      setUpdateValidation('preparing', 1, 0);
+      const release = await getOfficialRelease();
       await ensureUpdateTables(pool);
-      const [priorUpdate] = await pool.execute('SELECT update_id FROM wiki_updates WHERE update_id=?', [pkg.id]);
-      if (priorUpdate.length) throw new UpdateError('Este paquete ya se instaló.', 409);
       const [history] = await pool.query('SELECT release_version FROM wiki_updates');
-      const priorVersion = history.reduce(
-        (latest, row) => (compareVersions(row.release_version, latest) > 0 ? row.release_version : latest),
+      const currentVersion = history.reduce(
+        (latest, row) => (compareVersions(row.release_version, latest) > 0 ? latest : row.release_version),
         require('./package.json').version,
       );
-      if (compareVersions(pkg.version, priorVersion) <= 0)
-        throw new UpdateError('La versión debe ser superior a la ya instalada.', 409);
-
-      setUpdateValidation('preflight', 72);
-      connection = await pool.getConnection();
-      await preflightUpdatePackage(pkg, {
-        root: __dirname,
-        connection,
-        onProgress: (_stage, progress) =>
-          setUpdateValidation('preflight', 72 + Math.floor(((progress - 18) / 10) * 27)),
+      if (compareVersions(release.version, currentVersion) <= 0)
+        throw new UpdateError('El sistema ya está en la versión más reciente.', 409);
+      if (!release.asset)
+        throw new UpdateError('La release más reciente no contiene el paquete ZIP oficial esperado.', 503);
+      setUpdateValidation('preparing', 5, 50);
+      const file = await downloadReleasePackage(release, updateUploadRoot, {
+        onProgress: (progress) =>
+          setUpdateValidation('preparing', 5 + Math.floor((progress / 100) * 5), 50 + Math.floor(progress / 2)),
       });
-
-      const validationToken = crypto.randomUUID(),
-        expiry = setTimeout(() => {
-          if (pendingValidatedUpdate?.token === validationToken) {
-            pendingValidatedUpdate = null;
-            setUpdateValidation('idle', 0);
-          }
-        }, 5 * 60 * 1000);
-      expiry.unref();
-      pendingValidatedUpdate = {
-        token: validationToken,
-        userId: req.session.user.id,
-        pkg,
-        expiresAt: Date.now() + 5 * 60 * 1000,
-        expiry,
-      };
-      setUpdateValidation('verified', 100);
-      res.json({ ok: true, token: validationToken, version: pkg.version });
+      await validateUpdatePackage(req, res, next, file, release);
     } catch (error) {
-      setUpdateValidation('failed', updateValidationState.progress);
-      if (error instanceof UpdateError)
-        return res.status(error.status).json({ error: error.message });
+      setUpdateValidation('failed', updateValidationState.progress, updateValidationState.phaseProgress);
+      if (error instanceof UpdateError) return res.status(error.status).json({ error: error.message });
       next(error);
     } finally {
-      connection?.release();
       updateValidationBusy = false;
-      await removeTemporaryUpload(req.file, updateUploadRoot, /^package-[0-9a-f-]{36}\.zip$/);
     }
   },
 );
@@ -2877,6 +3009,8 @@ app.get(
       active: updateValidationState.active,
       progress: updateValidationState.progress,
       stage: updateValidationState.stage,
+      phase: updateValidationState.phase,
+      phaseProgress: updateValidationState.phaseProgress,
     }),
 );
 app.post(
@@ -2894,8 +3028,11 @@ app.post(
         validated.token !== tokenValue ||
         validated.userId !== req.session.user.id ||
         validated.expiresAt <= Date.now()
-      )
+      ) {
+        setUpdateValidation('failed', updateValidationState.progress, updateValidationState.phaseProgress);
+        failUpdateMaintenance();
         return res.status(400).json({ error: 'El paquete validado venció o ya no está disponible. Valídalo de nuevo.' });
+      }
       clearPendingValidatedUpdate();
 
       setUpdateMaintenance('preflight', 28);
@@ -2924,11 +3061,11 @@ app.post(
         setTimeout(() => {
           if (!httpServer) return process.exit(75);
           httpServer.close((error) => {
-            if (error) console.error('Error al cerrar el servidor tras la actualización:', error.message);
+            if (error) console.error('Failed to close the server after the update:', error.message);
             pool
               .end()
               .catch((closeError) =>
-                console.error('Error al cerrar la conexión de base de datos:', closeError.message),
+                console.error('Failed to close the database connection:', closeError.message),
               )
               .finally(() => process.exit(75));
           });
@@ -3974,8 +4111,7 @@ app.put('/api/admin/settings', auth, async (req, res, next) => {
       typeof name !== 'string' ||
       !name.trim() ||
       name.length > 120 ||
-      !Array.isArray(spaces) ||
-      spaces.length > 100 ||
+      (spaces !== undefined && (!Array.isArray(spaces) || spaces.length > 100)) ||
       (pageTitle !== undefined &&
         (typeof pageTitle !== 'string' || !pageTitle.trim() || pageTitle.trim().length > 120)) ||
       (favicon !== undefined && typeof favicon !== 'string') ||
@@ -3987,7 +4123,7 @@ app.put('/api/admin/settings', auth, async (req, res, next) => {
         .json({ error: 'Revisa los nombres del sitio, el título de página y la lista de espacios.' });
     const preUsedSlugs = new Set(),
       preReserved = new Set(['api', 'login', 'register', 'reset', 'admin', 'verify', 'media', 'two-factor', 'two-factor-setup']);
-    for (const sp of spaces) {
+    for (const sp of spaces || []) {
       if (!sp || typeof sp !== 'object' || Array.isArray(sp))
         return res.status(400).json({ error: 'Uno de los espacios no es válido o está duplicado.' });
       const normalized = spaceSlugify(sp.slug || sp.name);
@@ -4048,30 +4184,32 @@ app.put('/api/admin/settings', auth, async (req, res, next) => {
       return res
         .status(403)
         .json({ error: 'No tienes permiso para cambiar el contenido del pie de página.' });
-    const oldSpaces = await query('SELECT slug,name,icon,logo,sort_order FROM spaces');
-    const oldSpaceMap = new Map(oldSpaces.map((item) => [item.slug, item]));
-    const nextSpaceMap = new Map(spaces.map((item) => [spaceSlugify(item.slug || item.name), item]));
-    for (const [slug, item] of nextSpaceMap) {
-      const old = oldSpaceMap.get(slug);
-      if (!old && !(await canUser(req.session.user.id, 'spaces.create')))
-        return res.status(403).json({ error: 'No tienes permiso para crear espacios de documentación.' });
-      if (
-        old &&
-        (old.name !== String(item.name || '').trim() ||
-          old.icon !== String(item.icon || 'fa-book-open') ||
-          String(old.logo || '') !== String(item.logo || '') ||
-          Number(old.sort_order) !== spaces.indexOf(item)) &&
-        !(await canUser(req.session.user.id, 'spaces.edit'))
-      )
-        return res.status(403).json({ error: 'No tienes permiso para editar espacios de documentación.' });
+    if (spaces !== undefined) {
+      const oldSpaces = await query('SELECT slug,name,icon,logo,sort_order FROM spaces');
+      const oldSpaceMap = new Map(oldSpaces.map((item) => [item.slug, item]));
+      const nextSpaceMap = new Map(spaces.map((item) => [spaceSlugify(item.slug || item.name), item]));
+      for (const [slug, item] of nextSpaceMap) {
+        const old = oldSpaceMap.get(slug);
+        if (!old && !(await canUser(req.session.user.id, 'spaces.create')))
+          return res.status(403).json({ error: 'No tienes permiso para crear espacios de documentación.' });
+        if (
+          old &&
+          (old.name !== String(item.name || '').trim() ||
+            old.icon !== String(item.icon || 'fa-book-open') ||
+            String(old.logo || '') !== String(item.logo || '') ||
+            Number(old.sort_order) !== spaces.indexOf(item)) &&
+          !(await canUser(req.session.user.id, 'spaces.edit'))
+        )
+          return res.status(403).json({ error: 'No tienes permiso para editar espacios de documentación.' });
+      }
+      for (const old of oldSpaces)
+        if (
+          old.slug !== 'main' &&
+          !nextSpaceMap.has(old.slug) &&
+          !(await canUser(req.session.user.id, 'spaces.delete'))
+        )
+          return res.status(403).json({ error: 'No tienes permiso para eliminar espacios de documentación.' });
     }
-    for (const old of oldSpaces)
-      if (
-        old.slug !== 'main' &&
-        !nextSpaceMap.has(old.slug) &&
-        !(await canUser(req.session.user.id, 'spaces.delete'))
-      )
-        return res.status(403).json({ error: 'No tienes permiso para eliminar espacios de documentación.' });
     await query(
       "INSERT INTO settings (setting_key,setting_value) VALUES ('site',?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)",
       [
@@ -4090,33 +4228,35 @@ app.put('/api/admin/settings', auth, async (req, res, next) => {
         }),
       ],
     );
-    const usedSlugs = new Set();
-    const reserved = new Set(['api', 'login', 'register', 'reset', 'admin', 'verify', 'media', 'two-factor', 'two-factor-setup']);
-    for (let i = 0; i < spaces.length; i++) {
-      const sp = spaces[i],
-        slug = spaceSlugify(sp.slug || sp.name);
-      if (
-        !slug ||
-        reserved.has(slug.toLowerCase()) ||
-        usedSlugs.has(slug) ||
-        typeof sp.name !== 'string' ||
-        !sp.name.trim() ||
-        sp.name.length > 120
-      )
-        return res.status(400).json({ error: 'Uno de los espacios no es válido o está duplicado.' });
-      usedSlugs.add(slug);
-      const spaceLogo = String(sp.logo || '');
-      if (spaceLogo && !/^\/media\/[A-Za-z0-9_-]{16}\.(png|jpg|gif|webp)$/.test(spaceLogo))
-        return res.status(400).json({ error: 'El logotipo del espacio debe ser una imagen local subida.' });
-      await query(
-        'INSERT INTO spaces (slug,name,icon,logo,sort_order) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),icon=VALUES(icon),logo=VALUES(logo),sort_order=VALUES(sort_order)',
-        [slug, sp.name.trim(), String(sp.icon || 'fa-book-open').slice(0, 80), spaceLogo.slice(0, 500), i],
-      );
+    if (spaces !== undefined) {
+      const usedSlugs = new Set();
+      const reserved = new Set(['api', 'login', 'register', 'reset', 'admin', 'verify', 'media', 'two-factor', 'two-factor-setup']);
+      for (let i = 0; i < spaces.length; i++) {
+        const sp = spaces[i],
+          slug = spaceSlugify(sp.slug || sp.name);
+        if (
+          !slug ||
+          reserved.has(slug.toLowerCase()) ||
+          usedSlugs.has(slug) ||
+          typeof sp.name !== 'string' ||
+          !sp.name.trim() ||
+          sp.name.length > 120
+        )
+          return res.status(400).json({ error: 'Uno de los espacios no es válido o está duplicado.' });
+        usedSlugs.add(slug);
+        const spaceLogo = String(sp.logo || '');
+        if (spaceLogo && !/^\/media\/[A-Za-z0-9_-]{16}\.(png|jpg|gif|webp)$/.test(spaceLogo))
+          return res.status(400).json({ error: 'El logotipo del espacio debe ser una imagen local subida.' });
+        await query(
+          'INSERT INTO spaces (slug,name,icon,logo,sort_order) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),icon=VALUES(icon),logo=VALUES(logo),sort_order=VALUES(sort_order)',
+          [slug, sp.name.trim(), String(sp.icon || 'fa-book-open').slice(0, 80), spaceLogo.slice(0, 500), i],
+        );
+      }
+      const allowed = new Set(spaces.map((sp) => spaceSlugify(sp.slug || sp.name)));
+      for (const row of await query('SELECT slug FROM spaces'))
+        if (row.slug !== 'main' && !allowed.has(row.slug))
+          await query('DELETE FROM spaces WHERE slug=?', [row.slug]);
     }
-    const allowed = new Set(spaces.map((sp) => spaceSlugify(sp.slug || sp.name)));
-    for (const row of await query('SELECT slug FROM spaces'))
-      if (row.slug !== 'main' && !allowed.has(row.slug))
-        await query('DELETE FROM spaces WHERE slug=?', [row.slug]);
     res.json({ ok: true });
   } catch (e) {
     next(e);
@@ -4583,7 +4723,7 @@ app.post(
           throw error;
         }
       }
-      if (!saved) throw new Error('No se pudo generar un nombre disponible para la imagen.');
+      if (!saved) throw new Error('Could not generate an available image name.');
       res.status(201).json({ url: `/media/${filename}`, mime: 'image/webp', alt });
     } catch (error) {
       const code = String(error.code || '');
@@ -4822,7 +4962,7 @@ initialize()
       () =>
         expireTemporaryPasswords().catch((error) =>
           console.error(
-            'No se pudo revisar el vencimiento de contraseñas temporales:',
+            'Could not check temporary password expiration:',
             error.code || error.name || 'Error',
           ),
         ),
@@ -4835,7 +4975,7 @@ initialize()
           .execute('DELETE FROM rate_limit_buckets WHERE reset_at<?', [Date.now()])
           .catch((error) =>
             console.error(
-              'No se pudo limpiar los límites de solicitudes:',
+              'Could not clear request rate limits:',
               error.code || error.name || 'Error',
             ),
           ),
@@ -4845,7 +4985,7 @@ initialize()
     const schemaTimer = setInterval(
       () =>
         repairMissingTables().catch((error) =>
-          console.error('No se pudo revisar el esquema MySQL:', error.code || error.name || 'Error'),
+          console.error('Could not check the MySQL schema:', error.code || error.name || 'Error'),
         ),
       2_000,
     );
@@ -4861,10 +5001,10 @@ initialize()
     httpServer = app.listen(port, host, () => console.log(`Teralth Wiki escucha en ${host}:${port}`));
   })
   .catch((err) => {
-    console.error('No fue posible iniciar la aplicación:', err.code || err.message);
+    console.error('Could not start the application:', err.code || err.message);
     if (err.sqlMessage || err.message)
       console.error('Detalle MySQL:', String(err.sqlMessage || err.message).slice(0, 1200));
     if (err.teralthSchemaStatement)
-      console.error('Operación de esquema:', String(err.teralthSchemaStatement).slice(0, 700));
+      console.error('Schema operation:', String(err.teralthSchemaStatement).slice(0, 700));
     process.exitCode = 1;
   });

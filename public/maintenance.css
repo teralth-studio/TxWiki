@@ -27,13 +27,13 @@ body {
     #111214;
 }
 .maintenance-card {
-  width: min(100%, 460px);
-  min-height: 460px;
+  width: min(100%, 540px);
+  min-height: 620px;
   display: flex;
   align-items: center;
   flex-direction: column;
   justify-content: center;
-  padding: 44px 40px 38px;
+  padding: 36px 36px 30px;
   border: 1px solid #2e3037;
   border-radius: 20px;
   background: linear-gradient(155deg, #1a1b20 0%, #17181c 68%, #15161a 100%);
@@ -108,10 +108,96 @@ body {
 }
 .maintenance-stage {
   min-height: 24px;
-  margin: 18px 0 0;
+  margin: 14px 0 0;
   color: #d7d9e0;
   font-size: 13px;
   line-height: 1.6;
+}
+.maintenance-current-phase {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 15px;
+  color: #d7d9e0;
+  font-size: 12px;
+}
+.maintenance-current-phase strong {
+  color: #a7a9b2;
+  font-variant-numeric: tabular-nums;
+}
+.maintenance-phase-track,
+.maintenance-phase-item-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: #30323a;
+}
+.maintenance-phase-track {
+  width: 100%;
+  margin-top: 8px;
+}
+.maintenance-phase-track > span,
+.maintenance-phase-item-track > span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6179d4, #91a5ff);
+  transition: width 0.3s ease;
+}
+.maintenance-phases {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin: 17px 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+.maintenance-phases li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px 10px;
+  padding: 11px 12px;
+  border: 1px solid #2e3037;
+  border-radius: 10px;
+  background: #17181c;
+  color: #a7a9b2;
+  font-size: 12px;
+}
+.maintenance-phases li.is-active {
+  border-color: rgba(145, 165, 255, 0.5);
+  color: #f1f2f4;
+}
+.maintenance-phases li.is-complete {
+  border-color: rgba(73, 173, 130, 0.4);
+  color: #e2f5eb;
+}
+.maintenance-phases li.is-failed {
+  border-color: #9e444c;
+  color: #ff9a9f;
+}
+.maintenance-phases small {
+  color: #787b85;
+  font-size: 10px;
+}
+.maintenance-phases li.is-active small {
+  color: #aebeff;
+}
+.maintenance-phases li.is-complete small {
+  color: #72c99e;
+}
+.maintenance-phase-item-track {
+  grid-column: 1 / -1;
+  height: 4px;
+}
+.maintenance-phases li.is-complete .maintenance-phase-item-track > span {
+  background: #49ad82;
+}
+.maintenance-phases li.is-failed .maintenance-phase-item-track > span {
+  background: #d65059;
 }
 .maintenance-rule {
   width: 100%;
@@ -140,8 +226,8 @@ body {
     padding: 18px;
   }
   .maintenance-card {
-    min-height: 420px;
-    padding: 34px 22px 30px;
+    min-height: 0;
+    padding: 30px 20px 24px;
   }
 }
 @media (max-height: 560px) {
@@ -164,6 +250,10 @@ body {
   }
   .maintenance-stage {
     margin-top: 12px;
+  }
+  .maintenance-phases {
+    grid-template-columns: 1fr;
+    gap: 7px;
   }
   .maintenance-rule {
     margin-top: 16px;

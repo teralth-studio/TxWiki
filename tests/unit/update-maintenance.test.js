@@ -74,12 +74,24 @@ test('progress endpoint exposes only update state without requiring authenticati
   const maintenance = createUpdateMaintenance({ page: '' });
   const inactive = responseRecorder();
   maintenance.progress({}, inactive);
-  assert.deepEqual(inactive.body, { active: false, progress: 0, stage: 'idle' });
+  assert.deepEqual(inactive.body, {
+    active: false,
+    progress: 0,
+    stage: 'idle',
+    phase: 'preparation',
+    phaseProgress: 0,
+  });
 
-  maintenance.set('verifying', 16);
+  maintenance.set('verifying', 16, 45);
   const active = responseRecorder();
   maintenance.progress({}, active);
-  assert.deepEqual(active.body, { active: true, progress: 16, stage: 'verifying' });
+  assert.deepEqual(active.body, {
+    active: true,
+    progress: 16,
+    stage: 'verifying',
+    phase: 'verification',
+    phaseProgress: 45,
+  });
   assert.equal(active.headers['Cache-Control'], 'no-store, no-cache, must-revalidate');
   assert.equal(active.headers['X-Content-Type-Options'], 'nosniff');
   maintenance.clear();
@@ -87,10 +99,22 @@ test('progress endpoint exposes only update state without requiring authenticati
 
 test('failed updates display a short maintenance notice and then reopen the site', async () => {
   const maintenance = createUpdateMaintenance({ page: '', reopenDelay: 10 });
-  maintenance.set('verifying', 12);
+  maintenance.set('verifying', 12, 38);
   maintenance.fail();
-  assert.deepEqual(maintenance.state, { active: true, progress: 12, stage: 'failed' });
+  assert.deepEqual(maintenance.state, {
+    active: true,
+    progress: 12,
+    stage: 'failed',
+    phase: 'verification',
+    phaseProgress: 38,
+  });
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.deepEqual(maintenance.state, { active: false, progress: 0, stage: 'idle' });
+  assert.deepEqual(maintenance.state, {
+    active: false,
+    progress: 0,
+    stage: 'idle',
+    phase: 'preparation',
+    phaseProgress: 0,
+  });
   maintenance.clear();
 });

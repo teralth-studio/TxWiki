@@ -7128,7 +7128,14 @@ button[aria-busy='true'] {
 .update-history-section .section-heading {
   align-items: flex-start;
 }
-.update-version {
+.update-version-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.update-version-badge {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
@@ -7139,9 +7146,165 @@ button[aria-busy='true'] {
   color: var(--muted);
   font-size: 12px;
 }
-.update-version strong {
+.update-version-badge strong {
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+.update-version-badge.is-current {
+  border-color: rgba(73, 173, 130, 0.4);
+  background: rgba(73, 173, 130, 0.1);
+}
+.update-version-badge.is-current strong {
+  color: #72c99e;
+}
+.update-version-badge.is-available {
+  border-color: rgba(231, 171, 71, 0.4);
+  background: rgba(231, 171, 71, 0.1);
+}
+.update-version-badge.is-available strong {
+  color: #edc77e;
+}
+.update-version-badge.is-unavailable {
+  border-color: rgba(214, 80, 89, 0.4);
+  background: rgba(214, 80, 89, 0.09);
+}
+.update-release-status {
+  margin: 15px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.update-automatic-section > p:not(.update-notice),
+.update-install-section > p:not(.update-notice) {
+  margin: 0 0 13px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.update-notice-info {
+  padding: 12px 14px;
+  border: 1px solid rgba(93, 156, 255, 0.35);
+  border-radius: 9px;
+  background: rgba(57, 126, 236, 0.1);
+  color: #91beff;
+}
+.update-notice-info span {
+  min-width: 0;
+}
+.update-automatic-section > button {
+  margin-top: 5px;
+}
+.update-validation {
+  justify-items: center;
+  text-align: center;
+}
+.update-validation-heading {
+  width: 100%;
+  text-align: left;
+}
+.update-overall-progress {
+  position: relative;
+  width: 124px;
+  height: 124px;
+  display: grid;
+  place-items: center;
+  margin: 8px auto 0;
+}
+.update-overall-progress svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+.update-overall-progress circle {
+  fill: none;
+  stroke-width: 6;
+}
+.update-overall-track {
+  stroke: var(--line);
+}
+.update-overall-arc {
+  stroke: #91a5ff;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.35s ease;
+}
+.update-overall-progress > span {
+  color: var(--text);
+  font-size: 23px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.update-current-phase {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 9px;
+  color: var(--text);
+  font-size: 12px;
+}
+.update-current-phase strong {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.update-current-phase-track {
+  width: 100%;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--line);
+}
+.update-current-phase-track > span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6179d4, #91a5ff);
+  transition: width 0.25s ease-out;
+}
+.update-phase-list {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 5px 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+.update-phase-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.update-phase-list li.is-active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  color: var(--text);
+}
+.update-phase-list li.is-complete {
+  border-color: rgba(73, 173, 130, 0.45);
+  color: #49ad82;
+}
+.update-phase-list li.is-failed {
+  border-color: #9e444c;
+  color: #d65059;
+}
+.update-phase-list small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.update-validation.is-failed .update-overall-arc {
+  stroke: #d65059;
+}
+.update-validation.is-complete .update-overall-arc {
+  stroke: #49ad82;
 }
 .update-file-picker {
   display: flex;

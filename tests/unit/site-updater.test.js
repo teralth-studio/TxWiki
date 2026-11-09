@@ -455,8 +455,8 @@ test('update file allowlist and SQL parser reject paths and multiple statements'
 
 test('update validation rejects missing uploads before package verification', async () => {
   const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8').replace(/\r\n/g, '\n');
-  const start = source.indexOf("app.post(\n  '/api/admin/updates/validate'");
-  const end = source.indexOf("\napp.get(\n  '/api/admin/updates/validation-progress'", start);
+  const start = source.indexOf('function beginUpdateValidation(stage)');
+  const end = source.indexOf("\napp.post(\n  '/api/admin/updates/automatic/validate'", start);
   assert.ok(start >= 0 && end > start);
   let handlers = [], verified = false;
   const context = {

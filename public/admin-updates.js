@@ -1,7 +1,7 @@
 'use strict';
 
 window.TeralthAdminUpdates = {
-  async render(root, { api, t, esc, showError, csrf }) {
+  async render(root, { api, t, esc, showError, csrf, navigate, canManageBackups }) {
     try {
       const result = await api('/api/admin/updates');
       const label = (spanish, english) => esc(t(spanish, english));
@@ -11,17 +11,21 @@ window.TeralthAdminUpdates = {
       };
       root.innerHTML =
         '<section class="admin-section update-overview"><div class="section-heading"><div><h2>' +
-        label('Actualizaciones del sitio', 'Site updates') +
+        label('Actualización', 'Update') +
         '</h2><p>' +
         label(
-          'Instala un paquete firmado para actualizar el código o el esquema de la wiki.',
-          'Install a signed package to update the wiki code or database schema.',
+          'Consulta e instala versiones oficiales, o carga manualmente un paquete firmado.',
+          'Check for and install official releases, or upload a signed package manually.',
         ) +
-        '</p></div><span class="update-version">' +
+        '</p></div><div class="update-version-row"><span class="update-version-badge is-checking" id="updateVersionBadge">' +
         label('Versión actual', 'Current version') +
         ' <strong>' +
         esc(result.currentVersion) +
-        '</strong></span></div>' +
+        '</strong></span><button class="secondary-button" id="checkSiteUpdates" type="button"><i class="fa-solid fa-rotate" aria-hidden="true"></i> ' +
+        label('Buscar actualizaciones', 'Check for updates') +
+        '</button></div></div><p class="update-release-status" id="updateReleaseStatus" role="status" aria-live="polite">' +
+        label('Buscando la versión más reciente…', 'Checking for the latest version…') +
+        '</p>' +
         (result.configured
           ? ''
           : '<p class="update-notice update-notice-warning" role="status"><i class="fa-solid fa-triangle-exclamation"></i> ' +
@@ -30,12 +34,28 @@ window.TeralthAdminUpdates = {
               'The server has no Ed25519 public key configured. Ask the server administrator to configure UPDATE_PUBLIC_KEY.',
             ) +
             '</p>') +
-        '</section><section class="admin-section update-install-section"><h2>' +
-        label('Instalar un paquete', 'Install a package') +
+        '</section><section class="admin-section update-automatic-section"><h2>' +
+        label('Descargar automáticamente', 'Automatic update') +
         '</h2><p>' +
         label(
-          'Antes de aplicar la actualización se creará un backup. Al terminar, el servidor se reiniciará automáticamente.',
-          'A backup is created before the update is applied. The server restarts automatically when it finishes.',
+          'Descarga la versión oficial más reciente y actualiza el sistema sin subir un ZIP.',
+          'Download the latest official release and update the system without uploading a ZIP.',
+        ) +
+        '</p><p class="update-notice update-notice-info" id="updateAutomaticNotice" role="status"><i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>' +
+        label('Buscando actualizaciones…', 'Checking for updates…') +
+        '</span></p><button class="primary-button" id="applyAutomaticUpdate" type="button" disabled><i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i> ' +
+        label('Actualizar', 'Update') +
+        '</button></section><section class="admin-section update-install-section"><h2>' +
+        label('Descargar manualmente', 'Manual update') +
+        '</h2><p>' +
+        label(
+          'Carga un paquete ZIP firmado para actualizar el código o el esquema de la wiki.',
+          'Upload a signed ZIP package to update the wiki code or database schema.',
+        ) +
+        '</p><p class="update-notice update-notice-warning" role="note"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> ' +
+        label(
+          'Recomendamos no actualizar manualmente, a no ser que sepas lo que estás haciendo.',
+          'Manual updates are not recommended unless you know what you are doing.',
         ) +
         '</p><form id="siteUpdateForm"><label class="update-file-picker"><i class="fa-solid fa-file-zipper" aria-hidden="true"></i><span><strong>' +
         label('Selecciona el paquete ZIP firmado', 'Select a signed ZIP package') +
@@ -51,10 +71,20 @@ window.TeralthAdminUpdates = {
         '</p><button class="primary-button" id="applySiteUpdate" type="submit" ' +
         (result.configured ? '' : 'disabled') +
         '><i class="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i> ' +
-        label('Verificar e instalar', 'Verify and install') +
-        '</button><div class="update-validation" id="updateValidation" hidden role="status" aria-live="polite"><div class="update-validation-heading"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i><span id="updateValidationStage"></span><strong id="updateValidationPercent">0%</strong></div><div class="update-validation-track" id="updateValidationBar" role="progressbar" aria-label="' +
-        label('Progreso de validación del paquete', 'Package validation progress') +
-        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="updateValidationFill"></span></div></div><div class="form-message auth-error update-validation-error" hidden role="alert"></div></form></section><section class="admin-section update-history-section"><div class="section-heading"><div><h2>' +
+        label('Actualizar manualmente', 'Update manually') +
+        '</button></form><div class="update-validation" id="updateValidation" hidden role="status" aria-live="polite"><div class="update-validation-heading"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i><span id="updateValidationStage"></span><strong id="updateValidationPercent">0%</strong></div><div class="update-overall-progress" id="updateValidationBar" role="progressbar" aria-label="' +
+        label('Progreso total de actualización', 'Overall update progress') +
+        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="update-overall-track" cx="60" cy="60" r="52"></circle><circle class="update-overall-arc" id="updateValidationArc" cx="60" cy="60" r="52" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"></circle></svg><span id="updateValidationRingPercent">0%</span></div><div class="update-current-phase"><span id="updateCurrentPhase"></span><strong id="updateCurrentPhasePercent">0%</strong></div><div class="update-current-phase-track" id="updateCurrentPhaseBar" role="progressbar" aria-label="' +
+        label('Progreso de la fase actual', 'Current phase progress') +
+        '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div><ol class="update-phase-list"><li data-update-phase="preparation"><span>' +
+        label('Preparación', 'Preparation') +
+        '</span><small></small></li><li data-update-phase="verification"><span>' +
+        label('Verificación', 'Verification') +
+        '</span><small></small></li><li data-update-phase="installation"><span>' +
+        label('Instalación', 'Installation') +
+        '</span><small></small></li><li data-update-phase="finalization"><span>' +
+        label('Finalización', 'Finalization') +
+        '</span><small></small></li></ol></div><div class="form-message auth-error update-validation-error" hidden role="alert"></div></section><section class="admin-section update-history-section"><div class="section-heading"><div><h2>' +
         label('Actualizaciones instaladas', 'Installed updates') +
         '</h2><p>' +
         label('Las diez instalaciones más recientes en este sitio.', 'The ten most recent installations on this site.') +
@@ -79,104 +109,290 @@ window.TeralthAdminUpdates = {
             '</p>') +
         '</section>';
 
+      const refreshButton = root.querySelector('#checkSiteUpdates');
+      const automaticButton = root.querySelector('#applyAutomaticUpdate');
+      let releaseOverview = null;
+      let releaseError = null;
+
+      const renderReleaseOverview = () => {
+        const badge = root.querySelector('#updateVersionBadge');
+        const status = root.querySelector('#updateReleaseStatus');
+        const notice = root.querySelector('#updateAutomaticNotice span');
+        if (!releaseOverview && !releaseError) {
+          badge.className = 'update-version-badge is-checking';
+          badge.innerHTML =
+            label('Versión actual', 'Current version') + ' <strong>' + esc(result.currentVersion) + '</strong>';
+          status.textContent = t('Buscando la versión más reciente…', 'Checking for the latest version…');
+          notice.textContent = status.textContent;
+          automaticButton.disabled = true;
+          return;
+        }
+        if (releaseError) {
+          badge.className = 'update-version-badge is-unavailable';
+          badge.innerHTML =
+            label('Versión actual', 'Current version') + ' <strong>' + esc(result.currentVersion) + '</strong>';
+          status.textContent = t(
+            'No se pudo consultar la versión oficial. Puedes intentarlo de nuevo o actualizar manualmente.',
+            'The official version could not be checked. Try again or update manually.',
+          );
+          notice.textContent = status.textContent;
+          automaticButton.disabled = true;
+          return;
+        }
+        const isAvailable = releaseOverview.available;
+        badge.className = `update-version-badge ${isAvailable ? 'is-available' : 'is-current'}`;
+        badge.innerHTML =
+          label('Versión actual', 'Current version') +
+          ' <strong>' +
+          esc(result.currentVersion) +
+          '</strong>';
+        status.textContent = isAvailable
+          ? t(
+              `Estás actualmente a ${releaseOverview.versionsBehind} ${releaseOverview.versionsBehind === 1 ? 'versión' : 'versiones'} de la versión más reciente.`,
+              `You are currently ${releaseOverview.versionsBehind} version${releaseOverview.versionsBehind === 1 ? '' : 's'} behind the latest release.`,
+            )
+          : t(
+              'Te encuentras en la versión más reciente del sistema, no hay actualizaciones disponibles.',
+              'You are on the latest system version. No updates are available.',
+            );
+        notice.textContent = isAvailable
+          ? t(
+              `Se ha detectado una actualización disponible: ${releaseOverview.latestVersion}`,
+              `An update is available: ${releaseOverview.latestVersion}`,
+            )
+          : t('No hay actualizaciones disponibles.', 'No updates are available.');
+        automaticButton.disabled = !(
+          isAvailable &&
+          result.configured &&
+          releaseOverview.assetAvailable
+        );
+        if (isAvailable && !releaseOverview.assetAvailable)
+          notice.textContent = t(
+            `La release ${releaseOverview.latestVersion} no contiene el ZIP oficial esperado.`,
+            `Release ${releaseOverview.latestVersion} does not contain the expected official ZIP.`,
+          );
+      };
+
+      const refreshReleaseOverview = async () => {
+        refreshButton.disabled = true;
+        refreshButton.classList.add('is-loading');
+        releaseOverview = null;
+        releaseError = null;
+        renderReleaseOverview();
+        try {
+          releaseOverview = await api('/api/admin/updates/latest');
+        } catch (error) {
+          releaseError = error;
+        } finally {
+          refreshButton.disabled = false;
+          refreshButton.classList.remove('is-loading');
+          renderReleaseOverview();
+        }
+      };
+
+      refreshButton.addEventListener('click', refreshReleaseOverview);
+      automaticButton.addEventListener('click', async () =>
+        runUpdate({
+          automatic: true,
+          button: automaticButton,
+          root,
+          api,
+          csrf,
+          t,
+          showError,
+          canManageBackups,
+          navigate,
+        }),
+      );
       root.querySelector('#siteUpdateForm')?.addEventListener('submit', async (event) => {
         event.preventDefault();
         const file = root.querySelector('#siteUpdateFile')?.files?.[0];
         if (!file) return;
-        const confirmation = await window.Swal.fire({
-          icon: 'warning',
-          title: t('¿Instalar esta actualización?', 'Install this update?'),
-          text: t(
-            'La wiki se reiniciará al terminar. No cierres esta ventana hasta que confirme que la actualización se instaló.',
-            'The wiki will restart after installation. Keep this window open until the update is confirmed.',
-          ),
-          showCancelButton: true,
-          confirmButtonText: t('Instalar actualización', 'Install update'),
-          cancelButtonText: t('Cancelar', 'Cancel'),
-          reverseButtons: true,
+        await runUpdate({
+          automatic: false,
+          file,
+          button: root.querySelector('#applySiteUpdate'),
+          root,
+          api,
+          csrf,
+          t,
+          showError,
+          canManageBackups,
+          navigate,
         });
-        if (!confirmation.isConfirmed) return;
-        const button = root.querySelector('#applySiteUpdate');
-        const progress = root.querySelector('#updateValidation'),
-          progressStage = root.querySelector('#updateValidationStage'),
-          progressPercent = root.querySelector('#updateValidationPercent'),
-          progressBar = root.querySelector('#updateValidationBar'),
-          progressFill = root.querySelector('#updateValidationFill'),
-          errorBox = root.querySelector('.update-validation-error');
-        const validationLabels = {
-          receiving: t('Subiendo el paquete para validarlo…', 'Uploading the package for validation…'),
-          verifying: t('Comprobando firma, clave SSH, hashes y archivos…', 'Checking the signature, SSH key, hashes, and files…'),
-          preflight: t('Revisando sintaxis, rutas y disponibilidad del servidor…', 'Checking syntax, paths, and server readiness…'),
-          verified: t('Validación completa. Preparando el mantenimiento…', 'Validation complete. Preparing maintenance…'),
-          failed: t('La validación falló. El sitio sigue disponible.', 'Validation failed. The site remains available.'),
-        };
-        const showValidationProgress = (value, stage) => {
-          const amount = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
-          progress.hidden = false;
-          progressStage.textContent = validationLabels[stage] || validationLabels.verifying;
-          progressPercent.textContent = `${amount}%`;
-          progressBar.setAttribute('aria-valuenow', String(amount));
-          progressFill.style.width = `${amount}%`;
-          progress.classList.toggle('is-failed', stage === 'failed');
-          progress.classList.toggle('is-complete', stage === 'verified');
-        };
-        button.disabled = true;
-        errorBox.hidden = true;
-        showValidationProgress(0, 'receiving');
-        let maintenanceEntered = false;
-        let validationPolling = true;
-        const pollValidation = async () => {
-          while (validationPolling) {
-            try {
-              const status = await api('/api/admin/updates/validation-progress');
-              if (status.active || status.stage === 'verified' || status.stage === 'failed')
-                showValidationProgress(status.progress, status.stage);
-            } catch {
-              progressStage.textContent = t('Esperando el estado de validación del servidor…', 'Waiting for the server validation status…');
-            }
-            await new Promise((resolve) => window.setTimeout(resolve, 350));
-          }
-        };
-        const validationPoll = pollValidation();
-        try {
-          const form = new FormData();
-          form.append('package', file);
-          const validated = await uploadPackage(form, csrf, (amount, stage) =>
-            showValidationProgress(amount, stage),
-          );
-          validationPolling = false;
-          showValidationProgress(100, 'verified');
-          if (!validated.token) throw new Error(t('El servidor no devolvió una autorización de instalación válida.', 'The server did not return a valid installation authorization.'));
-          await loadMaintenanceAssets();
-          window.TeralthMaintenance.enter();
-          maintenanceEntered = true;
-          await api('/api/admin/updates/install', {
-            method: 'POST',
-            body: JSON.stringify({ token: validated.token }),
-          });
-        } catch (error) {
-          validationPolling = false;
-          await validationPoll;
-          if (maintenanceEntered) {
-            window.TeralthMaintenance.setProgress(0, 'failed');
-            window.setTimeout(() => window.location.reload(), 11000);
-          } else {
-            showValidationProgress(
-              Number(progressBar.getAttribute('aria-valuenow') || 0),
-              'failed',
-            );
-            errorBox.textContent = error.message;
-            errorBox.hidden = false;
-            button.disabled = false;
-            if (error.status >= 500) showError(root, error);
-          }
-        }
       });
+
+      renderReleaseOverview();
+      refreshReleaseOverview();
     } catch (error) {
       showError(root, error);
     }
   },
 };
+
+const updatePhases = ['preparation', 'verification', 'installation', 'finalization'];
+const stagePhases = {
+  receiving: 'preparation',
+  preparing: 'preparation',
+  verifying: 'verification',
+  preflight: 'verification',
+  verified: 'verification',
+  backup: 'installation',
+  'backup-complete': 'installation',
+  staging: 'installation',
+  'installing-files': 'installation',
+  migrations: 'installation',
+  finalizing: 'finalization',
+  complete: 'finalization',
+};
+
+async function runUpdate({ automatic, file, button, root, api, csrf, t, showError, canManageBackups, navigate }) {
+  const confirmation = await window.Swal.fire({
+    icon: 'warning',
+    title: t('¿Estás seguro que deseas actualizar?', 'Are you sure you want to update?'),
+    text: t(
+      'Antes de realizar una actualización, recuerda tener una copia de seguridad de tu sistema.',
+      'Remember to create a backup of your system before updating.',
+    ),
+    showCancelButton: true,
+    showDenyButton: Boolean(canManageBackups),
+    confirmButtonText: t('Actualizar', 'Update'),
+    denyButtonText: t('Crear backup', 'Create backup'),
+    cancelButtonText: t('Cancelar', 'Cancel'),
+    reverseButtons: true,
+  });
+  if (confirmation.isDenied) {
+    await navigate?.('backups');
+    return;
+  }
+  if (!confirmation.isConfirmed) return;
+
+  const progress = root.querySelector('#updateValidation');
+  const stage = root.querySelector('#updateValidationStage');
+  const percent = root.querySelector('#updateValidationPercent');
+  const overallBar = root.querySelector('#updateValidationBar');
+  const ringPercent = root.querySelector('#updateValidationRingPercent');
+  const ring = root.querySelector('#updateValidationArc');
+  const phaseLabel = root.querySelector('#updateCurrentPhase');
+  const phasePercent = root.querySelector('#updateCurrentPhasePercent');
+  const phaseBar = root.querySelector('#updateCurrentPhaseBar');
+  const errorBox = root.querySelector('.update-validation-error');
+  const stageLabels = {
+    receiving: t('Preparando el paquete de actualización…', 'Preparing the update package…'),
+    preparing: t('Preparando el entorno…', 'Preparing the environment…'),
+    verifying: t('Verificando firma, clave y archivos…', 'Verifying the signature, key, and files…'),
+    preflight: t('Comprobando el entorno de instalación…', 'Checking the installation environment…'),
+    verified: t('Verificación completa. Iniciando instalación…', 'Verification complete. Starting installation…'),
+    failed: t('La validación falló. El sitio sigue disponible.', 'Validation failed. The site remains available.'),
+  };
+  const phaseLabels = {
+    preparation: t('Preparación', 'Preparation'),
+    verification: t('Verificación', 'Verification'),
+    installation: t('Instalación', 'Installation'),
+    finalization: t('Finalización', 'Finalization'),
+  };
+  const showProgress = (value, currentStage, phase = stagePhases[currentStage], phaseValue = value) => {
+    const overall = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+    const currentPhase = phase || 'preparation';
+    const currentAmount = Math.max(0, Math.min(100, Math.round(Number(phaseValue) || 0)));
+    const currentIndex = updatePhases.indexOf(currentPhase);
+    progress.hidden = false;
+    stage.textContent = stageLabels[currentStage] || stageLabels.verifying;
+    percent.textContent = `${overall}%`;
+    ringPercent.textContent = `${overall}%`;
+    overallBar.setAttribute('aria-valuenow', String(overall));
+    ring.setAttribute('stroke-dashoffset', String(100 - overall));
+    phaseLabel.textContent = phaseLabels[currentPhase] || phaseLabels.preparation;
+    phasePercent.textContent = `${currentAmount}%`;
+    phaseBar.setAttribute('aria-valuenow', String(currentAmount));
+    phaseBar.firstElementChild.style.width = `${currentAmount}%`;
+    for (const [index, phaseName] of updatePhases.entries()) {
+      const item = root.querySelector(`[data-update-phase="${phaseName}"]`);
+      const state = item?.querySelector('small');
+      const complete = currentStage === 'complete' || index < currentIndex;
+      const active = index === currentIndex && currentStage !== 'complete';
+      item?.classList.toggle('is-complete', complete);
+      item?.classList.toggle('is-active', active);
+      item?.classList.toggle('is-failed', active && currentStage === 'failed');
+      if (state)
+        state.textContent = complete
+          ? t('Completada', 'Complete')
+          : active
+            ? t('En curso', 'In progress')
+            : t('Pendiente', 'Pending');
+    }
+    progress.classList.toggle('is-failed', currentStage === 'failed');
+    progress.classList.toggle('is-complete', currentStage === 'complete');
+  };
+
+  button.disabled = true;
+  errorBox.hidden = true;
+  showProgress(0, automatic ? 'preparing' : 'receiving', 'preparation', 0);
+  let maintenanceEntered = false;
+  let validationPolling = true;
+  const pollValidation = async () => {
+    while (validationPolling) {
+      try {
+        const status = await api('/api/admin/updates/validation-progress');
+        if (status.active || status.stage === 'verified' || status.stage === 'failed')
+          showProgress(status.progress, status.stage, status.phase, status.phaseProgress);
+      } catch {
+        stage.textContent = t(
+          'Esperando el estado de validación del servidor…',
+          'Waiting for the server validation status…',
+        );
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 350));
+    }
+  };
+  const validationPoll = pollValidation();
+  try {
+    let validated;
+    if (automatic) {
+      validated = await api('/api/admin/updates/automatic/validate', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+    } else {
+      const form = new FormData();
+      form.append('package', file);
+      validated = await uploadPackage(form, csrf, (amount) =>
+        showProgress(10 + Math.floor((amount / 100) * 8), 'receiving', 'preparation', amount),
+      );
+    }
+    validationPolling = false;
+    await validationPoll;
+    showProgress(45, 'verified', 'verification', 100);
+    if (!validated.token)
+      throw new Error(t('El servidor no devolvió una autorización de instalación válida.', 'The server did not return a valid installation authorization.'));
+    await loadMaintenanceAssets();
+    window.TeralthMaintenance.enter();
+    maintenanceEntered = true;
+    await api('/api/admin/updates/install', {
+      method: 'POST',
+      body: JSON.stringify({ token: validated.token }),
+    });
+  } catch (error) {
+    validationPolling = false;
+    await validationPoll;
+    if (maintenanceEntered) {
+      window.TeralthMaintenance.setProgress(0, 'failed');
+      window.setTimeout(() => window.location.reload(), 11000);
+    } else {
+      showProgress(
+        Number(overallBar.getAttribute('aria-valuenow') || 0),
+        'failed',
+        updatePhases.find((phaseName) => root.querySelector(`[data-update-phase="${phaseName}"].is-active`)) ||
+          'preparation',
+        0,
+      );
+      errorBox.textContent = error.message;
+      errorBox.hidden = false;
+      button.disabled = false;
+      if (error.status >= 500) showError(root, error);
+    }
+  }
+}
 
 function loadMaintenanceAssets() {
   const styles = document.querySelector('link[data-maintenance-style]')
@@ -212,7 +428,7 @@ function uploadPackage(form, csrf, onProgress) {
     request.setRequestHeader('Accept', 'application/json');
     request.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable && event.total > 0)
-        onProgress(3 + Math.floor((event.loaded / event.total) * 15), 'receiving');
+        onProgress(Math.floor((event.loaded / event.total) * 100));
     });
     request.addEventListener('load', () => {
       let response = {};

@@ -77,12 +77,13 @@ test('settings endpoint independently enforces identity, support and SEO permiss
   const end = source.indexOf("\napp.put('/api/admin/pages/:slug'", start);
   assert.ok(start >= 0 && end > start);
   const oldSite = { name: 'Old name', logo: '', favicon: '/assets/favicon.svg', sidebarLabel: 'Documentation', extra: 'preserved' };
-  let handler, written, allowed = true, permissionSet = null;
+  let handler, written, allowed = true, permissionSet = null, spaceQueries = 0, spaceWrites = 0;
   const space = { slug: 'main', name: 'Main', icon: 'fa-solid fa-book-open', logo: '', sort_order: 0 };
   const query = async (sql, args) => {
     if (sql.startsWith('SELECT setting_value')) return [{ setting_value: oldSite }];
-    if (sql.startsWith('SELECT slug,name')) return [space];
-    if (sql.startsWith('SELECT slug FROM spaces')) return [space];
+    if (sql.startsWith('SELECT slug,name')) { spaceQueries++; return [space]; }
+    if (sql.startsWith('SELECT slug FROM spaces')) { spaceQueries++; return [space]; }
+    if (sql.startsWith('INSERT INTO spaces') || sql.startsWith('DELETE FROM spaces')) spaceWrites++;
     if (sql.startsWith('INSERT INTO settings')) written = JSON.parse(args[0]);
     return [];
   };
@@ -134,4 +135,16 @@ test('settings endpoint independently enforces identity, support and SEO permiss
     await handler({ ...request, body }, forbidden, next);
     assert.equal(forbidden.statusCode, 403, permission);
   }
+
+  permissionSet = null;
+  const priorSpaceQueries = spaceQueries, priorSpaceWrites = spaceWrites;
+  const settingsOnly = { ...response, statusCode: 200, body: undefined };
+  await handler({
+    ...request,
+    body: { name: oldSite.name, logo: '', supportUrl: '' },
+  }, settingsOnly, next);
+  assert.equal(settingsOnly.statusCode, 200);
+  assert.equal(written.name, oldSite.name);
+  assert.equal(spaceQueries, priorSpaceQueries);
+  assert.equal(spaceWrites, priorSpaceWrites);
 });
