@@ -1,0 +1,9 @@
+body {
+  --accent: color-mix(in srgb, var(--theme-setting-primary-color, #91a8ff) 82%, #ffffff);
+  --accent-strong: color-mix(in srgb, var(--theme-setting-secondary-color, #7188e8) 82%, #ffffff);
+}
+
+body.light {
+  --accent: color-mix(in srgb, var(--theme-setting-primary-color, #91a8ff) 76%, #20232a);
+  --accent-strong: color-mix(in srgb, var(--theme-setting-secondary-color, #7188e8) 76%, #20232a);
+}

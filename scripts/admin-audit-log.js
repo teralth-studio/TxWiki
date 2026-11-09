@@ -59,6 +59,12 @@ function describeAdminAction(method, path, body = {}) {
   if (pathname === '/api/admin/settings/registration') return action('registration.updated');
   if (pathname === '/api/admin/backups/import') return action('backup.imported');
   if (pathname === '/api/admin/backups/schedule') return action('backup.schedule.updated');
+  if (pathname === '/api/admin/themes/backup') return action('theme.backup.created');
+  if (pathname === '/api/admin/themes/install') return action('theme.installed');
+  if (pathname === '/api/admin/themes/active') return action('theme.activated', body?.slug);
+  if (/^\/api\/admin\/themes\/[^/]+\/settings$/.test(pathname)) return action('theme.settings.updated', segments.at(-2));
+  if (/^\/api\/admin\/themes\/[^/]+$/.test(pathname) && normalizedMethod === 'DELETE')
+    return action('theme.deleted', segments.at(-1));
   if (pathname === '/api/admin/captcha') {
     if (body?.enabled === false) return action('captcha.disabled');
     if (body?.enabled === true) {

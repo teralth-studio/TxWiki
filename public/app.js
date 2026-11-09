@@ -188,6 +188,7 @@ const rolePermissionKeys = [
   'backups.schedule',
   'updates.install',
   'logs.view',
+  'themes.manage',
   'header_links.create_edit',
   'header_links.delete',
 ];
@@ -364,7 +365,7 @@ const pathParts = () => {
     return ['__invalid_path__', 'not-found'];
   }
 };
-const adminTabKeys = ['pages', 'categories', 'header-links', 'settings', 'spaces', 'languages', 'users', 'roles', 'proxy', 'smtp', 'backups', 'captcha', 'logs', 'updates'];
+const adminTabKeys = ['pages', 'categories', 'header-links', 'settings', 'spaces', 'languages', 'users', 'roles', 'proxy', 'smtp', 'backups', 'captcha', 'logs', 'themes', 'updates'];
 function adminUrl(tab = 'pages', space = state.space) {
   const section = adminTabKeys.includes(tab) ? tab : 'pages';
   return `/admin/${section}?space=${encodeURIComponent(space || 'main')}`;
@@ -2039,12 +2040,53 @@ function setView(view) {
     $('#' + id).hidden = id !== view;
   document.body.classList.toggle('wiki-mode', view === 'articleWrap');
   document.body.classList.toggle('admin-mode', view === 'adminPanel');
+  const themedPublicView = ['articleWrap', 'authPanel', 'passwordWall'].includes(view);
+  document.body.classList.toggle('theme-mode', themedPublicView);
+  syncWikiTheme(themedPublicView);
   document.body.classList.remove('editor-mode');
   $('#adminNavigation').hidden = view !== 'adminPanel';
   const fullScreen = ['authPanel', 'passwordWall'].includes(view);
   document.body.classList.toggle('auth-fullscreen', fullScreen);
   $('#toc').hidden = view !== 'articleWrap';
   $('#notice').hidden = true;
+}
+function syncWikiTheme(enabled) {
+  const linkId = 'activeWikiTheme';
+  let link = document.getElementById(linkId);
+  for (let index = document.body.style.length - 1; index >= 0; index--) {
+    const key = document.body.style.item(index);
+    if (key.startsWith('--theme-setting-')) document.body.style.removeProperty(key);
+  }
+  if (!enabled) {
+    link?.remove();
+    return;
+  }
+  const theme = state.config?.theme;
+  if (!theme || !/^\/theme-assets\/[a-z0-9][a-z0-9_-]{0,47}\/theme\.css$/.test(theme.stylesheet || '')) {
+    link?.remove();
+    return;
+  }
+  if (!link) {
+    link = document.createElement('link');
+    link.id = linkId;
+    link.rel = 'stylesheet';
+    document.head.append(link);
+  }
+  link.href = `${theme.stylesheet}?v=${encodeURIComponent(String(theme.version || '1'))}`;
+  const cssText = (value) => `"${String(value).replace(/[\\"\0-\x1f\x7f]/g, (character) =>
+    character === '\\' ? '\\\\' : character === '"' ? '\\"' : `\\${character.charCodeAt(0).toString(16)} `)}"`;
+  for (const [key, value] of Object.entries(theme.values || {})) {
+    if (!/^[a-z][a-z0-9-]{0,47}$/.test(key)) continue;
+    const type = theme.settingTypes?.[key];
+    let safeValue = null;
+    if (typeof value === 'boolean') safeValue = value ? '1' : '0';
+    else if (typeof value === 'number' && Number.isFinite(value)) safeValue = String(value);
+    else if (typeof value === 'string' && value.length <= 4000 && !value.includes('\0'))
+      safeValue = ['text', 'large-text'].includes(type) ? cssText(value) : /^[\p{L}\p{N}_\s#.,%+-]*$/u.test(value) ? value : null;
+    else if (Array.isArray(value) && value.length <= 100 && value.every((part) => typeof part === 'string' && part.length <= 120 && /^[\p{L}\p{N}_\s#.,%+-]+$/u.test(part)))
+      safeValue = value.join(', ');
+    if (safeValue !== null) document.body.style.setProperty(`--theme-setting-${key}`, safeValue);
+  }
 }
 function watchPassword(form) {
   const pass = form.querySelector('#regPass,#resetPass,#rotatePass,#changePass'),
@@ -2165,6 +2207,7 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
       ],
       ['captcha', t('Captcha', 'Captcha'), ['captcha.configure']],
       ['logs', t('Registros', 'Logs'), ['logs.view']],
+      ['themes', t('Temas', 'Themes'), ['themes.manage']],
       ['updates', t('Update', 'Update'), ['updates.install']],
     ],
     visible = tabDefs.filter(([, label, permissions]) => canAny(permissions));
@@ -2186,7 +2229,7 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
   const icons = {
     pages: 'file-lines', categories: 'folder-tree', 'header-links': 'link', settings: 'sliders', spaces: 'layer-group', languages: 'language',
     users: 'users', roles: 'user-shield', proxy: 'network-wired', smtp: 'envelope',
-    backups: 'database', captcha: 'shield-halved', logs: 'clipboard-list', updates: 'cloud-arrow-up',
+    backups: 'database', captcha: 'shield-halved', logs: 'clipboard-list', themes: 'palette', updates: 'cloud-arrow-up',
   };
   const navigation = $('#adminNavigation');
   navigation.setAttribute('aria-label', t('Administración', 'Administration'));
@@ -2212,6 +2255,7 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
     if (tab === 'captcha') await captchaTab(content);
     if (tab === 'backups') await backupsTab(content);
     if (tab === 'logs') await logsTab(content);
+    if (tab === 'themes') await themesTab(content);
     if (tab === 'updates') {
       const updatesModule = await loadAdminUpdatesModule();
       await updatesModule.render(content, {
@@ -2232,6 +2276,157 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
   } finally {
     hideLoading();
   }
+}
+async function themesTab(root) {
+  const htmlT = (spanish, english) => esc(t(spanish, english));
+  const load = async () => {
+    const result = await api('/api/admin/themes');
+    const heading = `<section class="theme-admin-intro"><div class="theme-admin-heading"><div><span class="theme-admin-kicker">${htmlT('Apariencia de la wiki', 'WIKI APPEARANCE')}</span><h2>${htmlT('Temas de wiki', 'Wiki themes')}</h2><p>${htmlT('Personaliza la apariencia de la wiki sin modificar su contenido ni sus funciones.', 'Customize the wiki appearance without changing its content or features.')}</p></div><div class="theme-admin-heading-actions"><span class="theme-count-badge"><i class="fa-solid fa-layer-group"></i> ${htmlT('Temas instalados', 'Themes installed')}: ${result.themes.length}</span><button class="primary-button" type="button" data-install-theme><i class="fa-solid fa-file-arrow-up"></i> ${htmlT('Instalar tema', 'Install theme')}</button></div></div></section>`;
+    const cards = result.themes.map((theme) => {
+      const active = theme.slug === result.active;
+      const preview = theme.previewUrl
+        ? `<img class="theme-preview-image" src="${esc(theme.previewUrl)}" alt="${esc(t('Vista previa de', 'Preview of') + ' ' + theme.name)}" loading="lazy">`
+        : `<div class="theme-preview-placeholder"><i class="fa-solid fa-palette" aria-hidden="true"></i><span>${esc(theme.name)}</span></div>`;
+      let support = '';
+      if (theme.support) {
+        const href = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(theme.support) ? `mailto:${theme.support}` : theme.support;
+        support = `<a class="secondary-button theme-support-link" href="${esc(href)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square"></i> ${htmlT('Soporte', 'Support')}</a>`;
+      }
+      return `<article class="theme-card" data-theme-card="${esc(theme.slug)}"><div class="theme-preview">${preview}<span class="theme-preview-shade"></span>${active ? `<span class="theme-active-label"><i class="fa-solid fa-check"></i> ${htmlT('Activo', 'Active')}</span>` : ''}</div><div class="theme-card-body"><div class="theme-card-title"><h3>${esc(theme.name)}</h3><span class="theme-version-badge">v${esc(theme.version)}</span></div><p class="theme-author"><i class="fa-solid fa-user-pen"></i> ${htmlT('Autor', 'By')} ${esc(theme.author)}</p><div class="theme-card-actions">${active ? `<button type="button" class="secondary-button theme-active-button" disabled><i class="fa-solid fa-check"></i> ${htmlT('Tema activo', 'Active theme')}</button>` : `<button type="button" class="success-button" data-activate-theme="${esc(theme.slug)}"><i class="fa-solid fa-arrow-down"></i> ${htmlT('Activar', 'Activate')}</button>`}${support}<button type="button" class="secondary-button theme-edit-button" data-edit-theme="${esc(theme.slug)}" aria-label="${esc(t('Ajustar tema', 'Theme settings'))}" title="${esc(t('Ajustar tema', 'Theme settings'))}"><i class="fa-solid fa-gear"></i></button><button type="button" class="danger-button theme-delete-button" data-delete-theme="${esc(theme.slug)}" ${theme.slug === 'default' || active ? 'disabled title="' + esc(t(theme.slug === 'default' ? 'El tema Default no se puede eliminar.' : 'Activa otro tema antes de eliminar este.', theme.slug === 'default' ? 'The Default theme cannot be deleted.' : 'Activate another theme before deleting this one.')) + '"' : ''} aria-label="${esc(t('Eliminar tema', 'Delete theme'))}"><i class="fa-solid fa-trash"></i></button></div></div></article>`;
+    }).join('');
+    root.innerHTML = heading + `<div class="theme-grid">${cards}</div>`;
+    root.querySelectorAll('.theme-preview-image').forEach((image) => image.addEventListener('error', () => {
+      const placeholder = document.createElement('div');
+      placeholder.className = 'theme-preview-placeholder';
+      placeholder.innerHTML = '<i class="fa-solid fa-palette" aria-hidden="true"></i><span></span>';
+      placeholder.querySelector('span').textContent = image.alt.replace(/^.*?\s/, '');
+      image.replaceWith(placeholder);
+    }, { once: true }));
+  };
+  try { await load(); } catch (error) { showError($('#adminPanel'), error); return; }
+
+  const settingField = (setting, value) => {
+    const label = `<label class="theme-setting-field"><span>${esc(setting.name)}</span>`;
+    const attrs = `data-theme-setting="${esc(setting.key)}" data-theme-type="${esc(setting.type)}"`;
+    let input;
+    if (setting.type === 'color') input = `<input type="color" ${attrs} value="${esc(value)}">`;
+    else if (setting.type === 'number') input = `<input type="number" ${attrs} required value="${esc(value)}">`;
+    else if (setting.type === 'large-text') input = `<textarea class="settings-input" ${attrs} rows="4" maxlength="4000">${esc(value)}</textarea>`;
+    else if (setting.type === 'switch') input = `<span class="theme-switch-control"><input type="checkbox" ${attrs} ${value ? 'checked' : ''}><span>${value ? t('Activado', 'Enabled') : t('Desactivado', 'Disabled')}</span></span>`;
+    else if (setting.type === 'dropdown' || setting.type === 'multiple-dropdown') {
+      const selected = Array.isArray(value) ? value : [value];
+      input = `<select class="settings-input" ${attrs} ${setting.type === 'multiple-dropdown' ? 'multiple size="4"' : ''}>${setting.options.map((option) => `<option value="${esc(option)}" ${selected.includes(option) ? 'selected' : ''}>${esc(option)}</option>`).join('')}</select>`;
+    } else input = `<input class="settings-input" type="text" ${attrs} maxlength="240" value="${esc(value)}">`;
+    return label + input + '</label>';
+  };
+
+  root.onclick = async (event) => {
+    try {
+    const activate = event.target.closest('[data-activate-theme]');
+    if (activate) {
+      try {
+        const response = await api('/api/admin/themes/active', { method: 'PUT', body: JSON.stringify({ slug: activate.dataset.activateTheme }) });
+        state.config.theme = response.theme;
+        syncWikiTheme(false);
+        notify({ icon: 'success', title: t('Tema activado', 'Theme activated') });
+        await load();
+      } catch (error) { notify({ icon: 'error', title: t('No se pudo activar el tema', 'Could not activate theme'), text: error.message }); }
+      return;
+    }
+    const edit = event.target.closest('[data-edit-theme]');
+    if (edit) {
+      let theme;
+      try { theme = (await api('/api/admin/themes')).themes.find((item) => item.slug === edit.dataset.editTheme); }
+      catch (error) { showError($('#adminPanel'), error); return; }
+      if (!theme) return;
+      const result = await Swal.fire({
+        title: `${t('Ajustes del tema', 'Theme settings')}: ${esc(theme.name)}`,
+        html: `<div class="theme-settings-form">${theme.settings.map((setting) => settingField(setting, theme.values?.[setting.key] ?? setting.default)).join('') || `<p class="theme-settings-empty">${htmlT('Este tema no tiene opciones configurables.', 'This theme has no configurable settings.')}</p>`}</div>`,
+        width: 'min(760px, calc(100vw - 28px))',
+        showCancelButton: true,
+        confirmButtonText: t('Guardar ajustes', 'Save settings'),
+        cancelButtonText: t('Cancelar', 'Cancel'),
+        focusConfirm: false,
+        preConfirm: async () => {
+          if ([...Swal.getPopup().querySelectorAll('[data-theme-setting]')].some((field) =>
+            field.dataset.themeType === 'number' && !field.value.trim())) {
+            Swal.showValidationMessage(t('Completa todos los ajustes numéricos.', 'Complete all number settings.'));
+            return false;
+          }
+          const values = {};
+          Swal.getPopup().querySelectorAll('[data-theme-setting]').forEach((field) => {
+            values[field.dataset.themeSetting] = field.dataset.themeType === 'switch'
+              ? field.checked
+              : field.dataset.themeType === 'multiple-dropdown'
+                ? [...field.selectedOptions].map((option) => option.value)
+                : field.dataset.themeType === 'number' ? Number(field.value) : field.value;
+          });
+          try { return await api(`/api/admin/themes/${encodeURIComponent(theme.slug)}/settings`, { method: 'PUT', body: JSON.stringify({ values }) }); }
+          catch (error) { Swal.showValidationMessage(esc(error.message)); return false; }
+        },
+      });
+      if (result.isConfirmed) {
+        notify({ icon: 'success', title: t('Ajustes guardados', 'Theme settings saved') });
+        if (result.value.active) state.config.theme.values = result.value.values;
+        await load();
+      }
+      return;
+    }
+    const remove = event.target.closest('[data-delete-theme]');
+    if (remove) {
+      const slug = remove.dataset.deleteTheme;
+      const confirmed = await Swal.fire({ icon: 'warning', title: t('¿Eliminar tema?', 'Delete theme?'), text: t('Se eliminarán permanentemente los archivos de este tema.', 'This theme files will be permanently deleted.'), showCancelButton: true, confirmButtonText: t('Eliminar', 'Delete'), cancelButtonText: t('Cancelar', 'Cancel'), confirmButtonColor: '#c94747' });
+      if (!confirmed.isConfirmed) return;
+      try { await api(`/api/admin/themes/${encodeURIComponent(slug)}`, { method: 'DELETE' }); notify({ icon: 'success', title: t('Tema eliminado', 'Theme deleted') }); await load(); }
+      catch (error) { notify({ icon: 'error', title: t('No se pudo eliminar', 'Could not delete'), text: error.message }); }
+      return;
+    }
+    if (event.target.closest('[data-install-theme]')) {
+      const installResult = await Swal.fire({
+        title: t('Instalar tema', 'Install theme'),
+        html: `<p class="theme-install-copy">${htmlT('Sube un ZIP con settings.json y theme.css en la raíz. Puede incluir preview.png y recursos en assets/. Crea una copia de seguridad antes de instalar.', 'Upload a ZIP with settings.json and theme.css at its root. It may include preview.png and assets/ resources. Create a backup before installing.')}</p><label class="theme-upload-field"><span>${htmlT('Archivo ZIP del tema', 'Theme ZIP file')}</span><input type="file" id="themeZipFile" accept=".zip,application/zip"></label><div class="theme-backup-row"><span><i class="fa-solid fa-shield-halved"></i> ${htmlT('Protege los datos actuales antes de instalar.', 'Protect the current data before installing.')}</span></div><p id="themeBackupStatus" class="theme-backup-status" aria-live="polite" hidden></p>`,
+        width: 'min(620px, calc(100vw - 28px))',
+        showCancelButton: true,
+        showDenyButton: true,
+        denyButtonText: t('Copia de seguridad', 'Create backup'),
+        denyButtonColor: '#687383',
+        confirmButtonText: t('Instalar tema', 'Install theme'),
+        cancelButtonText: t('Cancelar', 'Cancel'),
+        confirmButtonColor: '#33956b',
+        reverseButtons: true,
+        focusConfirm: false,
+        preDeny: async () => {
+          const status = Swal.getPopup().querySelector('#themeBackupStatus');
+          try {
+            const response = await api('/api/admin/themes/backup', { method: 'POST', body: '{}' });
+            status.textContent = `${t('Copia creada', 'Backup created')}: ${response.name}`;
+            status.classList.add('success');
+            status.hidden = false;
+            return false;
+          } catch (error) {
+            status.textContent = error.message;
+            status.classList.remove('success');
+            status.hidden = false;
+            return false;
+          }
+        },
+        preConfirm: async () => {
+          const file = Swal.getPopup().querySelector('#themeZipFile').files[0];
+          if (!file) { Swal.showValidationMessage(t('Selecciona el archivo ZIP del tema.', 'Choose a theme ZIP file.')); return false; }
+          if (!/\.zip$/i.test(file.name) || file.size > 25 * 1024 * 1024) { Swal.showValidationMessage(t('El ZIP debe ser válido y no superar 25 MB.', 'The ZIP must be valid and no larger than 25 MB.')); return false; }
+          const form = new FormData();
+          form.append('theme', file, 'theme.zip');
+          try { return await api('/api/admin/themes/install', { method: 'POST', body: form }); }
+          catch (error) { Swal.showValidationMessage(esc(error.message)); return false; }
+        },
+      });
+      if (installResult.isConfirmed) {
+        notify({ icon: 'success', title: t('Tema instalado', 'Theme installed') });
+        await load();
+      }
+    }
+    } catch (error) { showError($('#adminPanel'), error); }
+  };
 }
 function settingsGroup(title, ...elements) {
   const section = document.createElement('section');
@@ -3101,6 +3296,11 @@ async function logsTab(root) {
     'backup.imported': ['Se importó una copia de seguridad', 'Imported a backup'],
     'backup.schedule.updated': ['Se actualizó la programación de copias', 'Updated backup schedule'],
     'backup.updated': ['Se actualizaron los ajustes de copias de seguridad', 'Updated backup settings'],
+    'theme.backup.created': ['Creó una copia de seguridad antes de instalar un tema', 'Created a backup before installing a theme'],
+    'theme.installed': ['Instaló un tema', 'Installed a theme'],
+    'theme.activated': ['Activó un tema', 'Activated a theme'],
+    'theme.settings.updated': ['Actualizó los ajustes de un tema', 'Updated theme settings'],
+    'theme.deleted': ['Eliminó un tema', 'Deleted a theme'],
     'update.installed': ['Se instaló una actualización', 'Installed an update'],
     'home.updated': ['Se cambió la página de inicio', 'Changed the home page'],
     'navigation.updated': ['Se reordenó la navegación', 'Reordered navigation'],
@@ -3268,6 +3468,12 @@ const ROLE_PERMISSION_GROUPS = [
     'Registros',
     'Logs',
     [['logs.view', 'Ver registros de actividad', 'View activity logs']],
+  ],
+  [
+    'themes',
+    'Temas',
+    'Themes',
+    [['themes.manage', 'Instalar y administrar temas', 'Install and manage themes']],
   ],
 ];
 async function headerLinksTab(root) {
@@ -3448,6 +3654,7 @@ function roleEditorRow(role, expanded = false) {
       'Install signed update packages.',
     ),
     logs: t('Consulta el historial de cambios administrativos.', 'Review administrative change history.'),
+    themes: t('Instala, activa, configura y elimina temas de la wiki.', 'Install, activate, configure, and remove wiki themes.'),
   };
   return `<article class="role-editor-card" data-role-key="${rowId}" data-system="${system}"><div class="role-line"><div class="role-line-identity"><span class="role-badge role-line-badge" style="--role-color:${esc(color)}">${name}</span>${system ? `<span class="role-system-lock"><i class="fa-solid fa-lock"></i> ${t('Rol del sistema', 'System role')}</span>` : ''}</div><div class="role-line-actions"><button type="button" class="secondary-button edit-role" aria-expanded="${expanded}"><i class="fa-solid fa-pen"></i> ${t('Editar', 'Edit')}</button>${system ? '' : `<button type="button" class="danger-button remove-role"><i class="fa-solid fa-trash"></i></button>`}</div></div><div class="role-edit-panel" ${expanded ? '' : 'hidden'}><div class="role-editor-fields"><label><span class="admin-label">${t('Nombre del rol', 'Role name')}</span><input class="settings-input" data-role-name maxlength="80" value="${esc(role.name || '')}" ${system ? 'readonly' : ''}></label><label><span class="admin-label">${t('Color del badge', 'Badge color')}</span><input type="color" data-role-color value="${esc(color)}" ${system ? 'disabled' : ''}></label><span class="role-badge role-preview" style="--role-color:${esc(color)}">${name}</span></div><label class="role-permission-all"><input type="checkbox" data-permission-all ${permissions.length === rolePermissionKeys.length ? 'checked' : ''} ${system ? 'disabled' : ''}><strong>${t('Todos los permisos', 'All permissions')}</strong></label><label class="role-permission-admin-view"><input type="checkbox" data-permission="admin.view" ${permissions.includes('admin.view') ? 'checked' : ''} ${system ? 'disabled' : ''}><span><strong>${t('Ver panel de administrador', 'View administrator panel')}</strong><small>${t('Mostrar el engranaje y permitir el acceso al panel.', 'Show the gear and allow access to the admin panel.')}</small></span></label><div class="role-permissions">${ROLE_PERMISSION_GROUPS.map(
     ([key, es, en, items]) => {

@@ -17,6 +17,7 @@ data/
 
 /images/
 /work/
+/themes/
 
 # Playwright
 /test-results/

@@ -16,8 +16,12 @@ sharp.concurrency(Math.max(1, Math.min(2, Number(process.env.IMAGE_PROCESSING_CO
 sharp.cache({ memory: 64, files: 20, items: 100 });
 const { rateLimit } = require('express-rate-limit');
 const proxyaddr = require('proxy-addr');
-const { encryptBackupDatabase } = require('./scripts/backup-crypto');
-const { decryptBackupDatabase } = require('./scripts/backup-crypto');
+const {
+  decryptBackupArchive,
+  decryptBackupDatabase,
+  encryptBackupArchive,
+  encryptBackupDatabase,
+} = require('./scripts/backup-crypto');
 const { requireCurrentAdminSession } = require('./scripts/admin-session');
 const { requirePrimaryAdmin, resolveSmtpPassword } = require('./scripts/smtp-security');
 const { SESSION_IDLE_MS, rejectLegacySessions } = require('./scripts/session-security');
@@ -30,6 +34,17 @@ const { normalizeSiteOptions, normalizeSupportUrl } = require('./scripts/site-se
 const { HEADER_LINK_LIMIT, normalizeHeaderLink, normalizeHeaderLinks } = require('./scripts/header-links');
 const { migrateSitePermissions } = require('./scripts/role-permissions');
 const { createAdminAuditMiddleware } = require('./scripts/admin-audit-log');
+const {
+  DEFAULT_THEME,
+  ThemeError,
+  installThemeZip,
+  listThemes,
+  normalizeValues: normalizeThemeValues,
+  readThemeAsset,
+  readThemeDefinition,
+  removeTheme,
+  safeThemeSlug,
+} = require('./scripts/theme-manager');
 const { createUpdateMaintenance } = require('./scripts/update-maintenance');
 const {
   countVersionsBehind,
@@ -45,9 +60,14 @@ const {
   verifyUpdatePackage,
 } = require('./scripts/site-updater');
 const updatePublicKey = process.env.UPDATE_PUBLIC_KEY || require('./scripts/update-public-key');
+const themesRoot = path.join(__dirname, 'themes');
 const yazl = require('yazl');
 const yauzl = require('yauzl');
-const { createBackupZipStream, readBackupZip } = require('./scripts/backup-zip');
+const {
+  createBackupZipStream,
+  createBackupZipStreamFromSources,
+  readBackupZip,
+} = require('./scripts/backup-zip');
 const {
   DEFAULT_TIME_ZONE,
   TIME_ZONES: backupTimeZones,
@@ -456,6 +476,47 @@ app.use((req, res, next) => {
 });
 app.use(maintenance.middleware);
 app.use(publicScripts);
+app.use('/theme-assets', async (req, res, next) => {
+  if (!['GET', 'HEAD'].includes(req.method)) return res.sendStatus(405);
+  try {
+    let segments;
+    try {
+      segments = req.path.split('/').filter(Boolean).map((part) => decodeURIComponent(part));
+    } catch {
+      return res.sendStatus(404);
+    }
+    if (segments.length < 2 || segments.some((part) => part.includes('/') || part.includes('\\')))
+      return res.sendStatus(404);
+    const [slug, ...assetParts] = segments,
+      asset = await readThemeAsset(themesRoot, slug, assetParts.join('/'));
+    if (!asset) return res.sendStatus(404);
+    res.set({
+      'Content-Type': asset.contentType,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': asset.contentType.startsWith('text/css')
+        ? 'public, max-age=300, must-revalidate'
+        : 'public, max-age=86400, immutable',
+    }).send(asset.buffer);
+  } catch (error) {
+    const code = /^[A-Z0-9_]{1,80}$/.test(error?.code || '') ? error.code : 'THEME_ASSET_FAILED';
+    console.error('[Teralth Wiki] Theme asset request failed', code);
+    if (error instanceof ThemeError && req.path.endsWith('/theme.css')) {
+      try {
+        const state = await resolveThemeState();
+        const fallback = await readThemeAsset(themesRoot, state.saved.active, 'theme.css');
+        if (fallback)
+          return res.set({
+            'Content-Type': fallback.contentType,
+            'X-Content-Type-Options': 'nosniff',
+            'Cache-Control': 'private, no-store',
+          }).send(fallback.buffer);
+      } catch (stateError) {
+        console.error('[Teralth Wiki] Theme fallback could not be loaded', stateError.code || 'THEME_STATE_FAILED');
+      }
+    }
+    next(error);
+  }
+});
 app.use(
   '/languages',
   express.static(path.join(__dirname, 'languages'), {
@@ -964,6 +1025,7 @@ const rolePermissionsDefault = [
   'backups.schedule',
   'updates.install',
   'logs.view',
+  'themes.manage',
   'header_links.create_edit',
   'header_links.delete',
 ];
@@ -1542,14 +1604,6 @@ function backupName(date) {
     zoneTag = backupTimeZone.replaceAll('/', '-').replace(/[^A-Za-z0-9_-]/g, '_');
   return `teralth-studio_${parts.year}-${parts.month}-${parts.day}_${parts.hour}-${parts.minute}-${parts.second}_${zoneTag}`;
 }
-async function secureBackupTree(directory) {
-  await fs.promises.chmod(directory, 0o700).catch(() => {});
-  for (const entry of await fs.promises.readdir(directory, { withFileTypes: true })) {
-    const file = path.join(directory, entry.name);
-    if (entry.isDirectory()) await secureBackupTree(file);
-    else await fs.promises.chmod(file, 0o600).catch(() => {});
-  }
-}
 function isInsideBackup(target) {
   const resolved = path.resolve(target),
     base = path.resolve(backupRoot) + path.sep;
@@ -1557,23 +1611,57 @@ function isInsideBackup(target) {
 }
 async function pruneBackups() {
   await fs.promises.mkdir(backupRoot, { recursive: true, mode: 0o700 });
-  const entries = [];
+  const backups = new Map();
   for (const entry of await fs.promises.readdir(backupRoot, { withFileTypes: true })) {
     const target = path.join(backupRoot, entry.name);
     if (!isInsideBackup(target)) continue;
-    const stats = await fs.promises.stat(target);
+    const stats = await fs.promises.lstat(target);
+    if (stats.isSymbolicLink()) continue;
     if (/^\.(?:partial-|restore-|upload-)/.test(entry.name) && stats.mtimeMs < Date.now() - 86400000) {
       await fs.promises.rm(target, { recursive: true, force: true });
       continue;
     }
-    if (
-      !entry.isDirectory() ||
-      !/^teralth-studio_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[A-Za-z0-9_-]{1,100}$/.test(entry.name)
-    )
+    const encryptedName = entry.isFile() && entry.name.endsWith('.enc')
+      ? entry.name.slice(0, -4)
+      : '';
+    if (encryptedName && /^teralth-studio_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[A-Za-z0-9_-]{1,100}$/.test(encryptedName)) {
+      backups.set(encryptedName, { target, mtime: stats.mtimeMs });
       continue;
-    entries.push({ target, mtime: stats.mtimeMs });
+    }
+    if (!entry.isDirectory() ||
+        !/^teralth-studio_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[A-Za-z0-9_-]{1,100}$/.test(entry.name))
+      continue;
+
+    const encryptedPath = `${target}.enc`;
+    let encryptedStat;
+    try { encryptedStat = await fs.promises.lstat(encryptedPath); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (encryptedStat) {
+      if (encryptedStat.isSymbolicLink() || !encryptedStat.isFile())
+        throw new Error('BACKUP_ARCHIVE_INVALID');
+      await fs.promises.rm(target, { recursive: true, force: false });
+      backups.set(entry.name, { target: encryptedPath, mtime: encryptedStat.mtimeMs });
+      continue;
+    }
+
+    const stagingPath = path.join(backupRoot, `.partial-${crypto.randomUUID()}`);
+    try {
+      const archive = await createBackupZipStream(target, entry.name);
+      await encryptBackupArchive(
+        archive,
+        stagingPath,
+        process.env.BACKUP_ENCRYPTION_KEY || process.env.SESSION_SECRET,
+      );
+      await fs.promises.rename(stagingPath, encryptedPath);
+      await fs.promises.rm(target, { recursive: true, force: false });
+      const encrypted = await fs.promises.stat(encryptedPath);
+      backups.set(entry.name, { target: encryptedPath, mtime: encrypted.mtimeMs });
+    } catch (error) {
+      await fs.promises.rm(stagingPath, { force: true }).catch(() => {});
+      throw error;
+    }
   }
-  entries.sort((a, b) => b.mtime - a.mtime);
+  const entries = [...backups.values()].sort((a, b) => b.mtime - a.mtime);
   for (const old of entries.slice(backupRetentionCount))
     if (isInsideBackup(old.target)) await fs.promises.rm(old.target, { recursive: true, force: true });
 }
@@ -1581,10 +1669,9 @@ async function createBackup(onProgress = () => {}) {
   await repairMissingTables();
   await fs.promises.mkdir(backupRoot, { recursive: true, mode: 0o700 });
   const now = new Date(),
-    name = backupName(now),
-    finalPath = path.join(backupRoot, name),
-    workingPath = path.join(backupRoot, `.partial-${crypto.randomUUID()}`);
-  await fs.promises.mkdir(workingPath, { mode: 0o700 });
+    name = `${backupName(now)}_${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`,
+    finalPath = path.join(backupRoot, `${name}.enc`),
+    stagingPath = path.join(backupRoot, `.partial-${crypto.randomUUID()}`);
   const connection = await pool.getConnection();
   try {
     await connection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
@@ -1607,8 +1694,6 @@ async function createBackup(onProgress = () => {}) {
       onProgress(Math.floor(((index + 1) / Math.max(persistentTables.length, 1)) * 45));
     }
     await connection.commit();
-    const appDir = path.join(workingPath, 'application');
-    await fs.promises.mkdir(appDir, { recursive: true, mode: 0o700 });
     const applicationItems = [
       'launcher.js',
       'server.js',
@@ -1620,12 +1705,14 @@ async function createBackup(onProgress = () => {}) {
       'scripts',
       'emails',
       'languages',
+      'themes',
     ];
+    const sources = [];
     for (const [index, item] of applicationItems.entries()) {
       const source = path.join(__dirname, item);
       try {
         await fs.promises.access(source);
-        await fs.promises.cp(source, path.join(appDir, item), { recursive: true, force: true });
+        sources.push({ source, archivePath: `application/${item}` });
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
       }
@@ -1634,7 +1721,7 @@ async function createBackup(onProgress = () => {}) {
     const uploads = path.join(__dirname, 'images');
     try {
       await fs.promises.access(uploads);
-      await fs.promises.cp(uploads, path.join(appDir, 'images'), { recursive: true, force: true });
+      sources.push({ source: uploads, archivePath: 'application/images' });
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
@@ -1642,32 +1729,27 @@ async function createBackup(onProgress = () => {}) {
     const legacyUploads = path.resolve(__dirname, process.env.DATA_DIR || 'data', 'uploads');
     try {
       await fs.promises.access(legacyUploads);
-      await fs.promises.mkdir(path.join(appDir, 'data'), { recursive: true });
-      await fs.promises.cp(legacyUploads, path.join(appDir, 'data', 'uploads'), {
-        recursive: true,
-        force: true,
-      });
+      sources.push({ source: legacyUploads, archivePath: 'application/data/uploads' });
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
     onProgress(95);
-    await fs.promises.writeFile(
-      path.join(workingPath, 'database.json.enc'),
-      encryptBackupDatabase(
-        JSON.stringify(database),
-        process.env.BACKUP_ENCRYPTION_KEY || process.env.SESSION_SECRET,
-      ),
-      { flag: 'wx', mode: 0o600 },
+    const encryptionKey = process.env.BACKUP_ENCRYPTION_KEY || process.env.SESSION_SECRET;
+    const encryptedDatabase = encryptBackupDatabase(JSON.stringify(database), encryptionKey);
+    const archive = await createBackupZipStreamFromSources(name, sources, encryptedDatabase);
+    await encryptBackupArchive(
+      archive,
+      stagingPath,
+      encryptionKey,
     );
-    await secureBackupTree(workingPath);
-    await fs.promises.rename(workingPath, finalPath);
+    await fs.promises.rename(stagingPath, finalPath);
     await pruneBackups();
     onProgress(100);
     return { name, path: finalPath };
   } catch (error) {
     await connection.rollback().catch(() => {});
-    if (isInsideBackup(workingPath))
-      await fs.promises.rm(workingPath, { recursive: true, force: true }).catch(() => {});
+    if (isInsideBackup(stagingPath))
+      await fs.promises.rm(stagingPath, { force: true }).catch(() => {});
     throw error;
   } finally {
     connection.release();
@@ -1816,6 +1898,17 @@ const backupUpload = multer({
     callback(null, true);
   },
 });
+const themeUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, callback) => {
+    if (!/\.zip$/i.test(file.originalname || ''))
+      return callback(new ThemeError('THEME_ZIP_REQUIRED', 'Select a theme ZIP file.'));
+    if (file.mimetype && !['application/zip', 'application/x-zip-compressed', 'application/octet-stream'].includes(file.mimetype))
+      return callback(new ThemeError('THEME_ZIP_REQUIRED', 'Select a valid theme ZIP file.'));
+    callback(null, true);
+  },
+});
 const updateUploadRoot = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'), 'updates');
 const updateUpload = multer({
   storage: multer.diskStorage({
@@ -1858,18 +1951,26 @@ async function removeTemporaryUpload(file, directory, filenamePattern) {
 const backupPersistentTables = ['users', 'spaces', 'categories', 'pages', 'settings', 'reactions', 'roles'];
 async function listBackups() {
   await fs.promises.mkdir(backupRoot, { recursive: true, mode: 0o700 });
-  const rows = [];
+  const backups = new Map();
   for (const entry of await fs.promises.readdir(backupRoot, { withFileTypes: true })) {
-    if (
-      !entry.isDirectory() ||
-      !/^teralth-studio_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[A-Za-z0-9_-]{1,100}$/.test(entry.name)
-    )
+    const target = path.join(backupRoot, entry.name);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isFile() && entry.name.endsWith('.enc')) {
+      const name = entry.name.slice(0, -4);
+      if (!/^teralth-studio_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[A-Za-z0-9_-]{1,100}$/.test(name)) continue;
+      const stat = await fs.promises.lstat(target);
+      backups.set(name, { name, createdAt: stat.mtime.toISOString() });
       continue;
-    const stat = await fs.promises.stat(path.join(backupRoot, entry.name));
-    rows.push({ name: entry.name, createdAt: stat.mtime.toISOString() });
+    }
+    if (!entry.isDirectory() ||
+        !/^teralth-studio_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[A-Za-z0-9_-]{1,100}$/.test(entry.name))
+      continue;
+    const stat = await fs.promises.lstat(target);
+    backups.set(entry.name, { name: entry.name, createdAt: stat.mtime.toISOString() });
   }
-  rows.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-  return rows.slice(0, backupRetentionCount);
+  return [...backups.values()]
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+    .slice(0, backupRetentionCount);
 }
 async function restoreDatabaseSnapshot(snapshot) {
   if (
@@ -1992,6 +2093,184 @@ async function applyStagedBackupImages(directory) {
     });
   }
 }
+async function applyStagedBackupThemes(directory) {
+  if (!directory) return;
+  const root = path.resolve(themesRoot), staged = path.resolve(directory), stageName = path.basename(staged);
+  if (path.dirname(staged) !== root || !/^\.restore-[0-9a-f-]{36}$/.test(stageName))
+    throw new Error('BACKUP_THEME_STAGE_INVALID');
+  await listThemes(staged);
+  const rootStat = await fs.promises.lstat(root);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw new Error('THEME_ROOT_INVALID');
+  const previous = path.join(__dirname, '.themes-previous-' + crypto.randomUUID());
+  await fs.promises.rename(root, previous);
+  try {
+    await fs.promises.rename(path.join(previous, stageName), root);
+  } catch (error) {
+    await fs.promises.rename(previous, root).catch(() => {});
+    throw error;
+  }
+  await fs.promises.rm(previous, { recursive: true, force: true }).catch((error) =>
+    console.error('[Teralth Wiki] Previous theme directory cleanup failed', error.code || 'THEME_CLEANUP_FAILED'),
+  );
+}
+async function saveThemeState(themeState) {
+  await query(
+    "INSERT INTO settings (setting_key,setting_value) VALUES ('theme_state',?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)",
+    [JSON.stringify(themeState)],
+  );
+}
+async function resolveThemeState() {
+  const [row] = await query("SELECT setting_value FROM settings WHERE setting_key='theme_state'");
+  let saved = { active: DEFAULT_THEME, values: {} };
+  if (row) {
+    try {
+      const parsed = json(row.setting_value);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+        saved = {
+          active: safeThemeSlug(parsed.active) ? parsed.active : DEFAULT_THEME,
+          values: parsed.values && typeof parsed.values === 'object' && !Array.isArray(parsed.values) ? parsed.values : {},
+        };
+      else throw new Error('THEME_STATE_INVALID');
+    } catch (error) {
+      const code = error instanceof ThemeError ? error.code : 'THEME_STATE_INVALID';
+      console.error('[Teralth Wiki] Theme state is invalid; reverting to Default.', code);
+      saved = { active: DEFAULT_THEME, values: {} };
+      await saveThemeState(saved);
+    }
+  }
+  let definition;
+  try {
+    definition = await readThemeDefinition(themesRoot, saved.active);
+  } catch (error) {
+    const code = error instanceof ThemeError ? error.code : 'THEME_ACTIVE_INVALID';
+    console.error('[Teralth Wiki] Active theme failed validation; reverting to Default.', code);
+    saved.active = DEFAULT_THEME;
+    definition = await readThemeDefinition(themesRoot, DEFAULT_THEME);
+    await saveThemeState(saved);
+  }
+  let values;
+  try {
+    values = normalizeThemeValues(definition.definition, saved.values[saved.active] || {});
+  } catch (error) {
+    const code = error instanceof ThemeError ? error.code : 'THEME_VALUES_INVALID';
+    console.error('[Teralth Wiki] Saved theme options failed validation; restoring defaults.', code);
+    values = normalizeThemeValues(definition.definition, {});
+    saved.values[saved.active] = values;
+    await saveThemeState(saved);
+  }
+  return { saved, definition: definition.definition, values };
+}
+function publicThemeView(slug, definition, values) {
+  return {
+    slug,
+    name: definition.name,
+    version: definition.version,
+    stylesheet: `/theme-assets/${slug}/theme.css`,
+    values,
+    settingTypes: Object.fromEntries(definition.settings.map((setting) => [setting.key, setting.type])),
+  };
+}
+function themeRouteError(res, error, fallback = 'The theme operation could not be completed.') {
+  const code = error instanceof ThemeError ? error.code : 'THEME_OPERATION_FAILED';
+  console.error('[Teralth Wiki] Theme operation failed', code);
+  const status = error instanceof ThemeError ? error.status : 500;
+  return res.status(status).json({ error: error instanceof ThemeError ? error.message : fallback });
+}
+app.get('/api/admin/themes', auth, requirePermission('themes.manage'), async (req, res, next) => {
+  try {
+    const state = await resolveThemeState();
+    const themes = await listThemes(themesRoot);
+    for (const theme of themes) {
+      try {
+        const { definition } = await readThemeDefinition(themesRoot, theme.slug);
+        theme.values = normalizeThemeValues(definition, state.saved.values[theme.slug] || {});
+      } catch (error) {
+        const code = error instanceof ThemeError ? error.code : 'THEME_VALUES_INVALID';
+        console.error('[Teralth Wiki] Theme preferences failed validation; restoring defaults.', code);
+        const { definition } = await readThemeDefinition(themesRoot, theme.slug);
+        theme.values = normalizeThemeValues(definition, {});
+        state.saved.values[theme.slug] = theme.values;
+        await saveThemeState(state.saved);
+      }
+    }
+    res.set('Cache-Control', 'private, no-store').json({ active: state.saved.active, themes });
+  } catch (error) {
+    themeRouteError(res, error);
+  }
+});
+app.put('/api/admin/themes/active', auth, requirePermission('themes.manage'), async (req, res) => {
+  try {
+    const slug = req.body?.slug;
+    if (!safeThemeSlug(slug)) throw new ThemeError('THEME_NOT_FOUND', 'Theme not found.', 404);
+    const { definition } = await readThemeDefinition(themesRoot, slug);
+    const state = await resolveThemeState();
+    state.saved.active = slug;
+    state.saved.values[slug] = normalizeThemeValues(definition, state.saved.values[slug] || {});
+    await saveThemeState(state.saved);
+    res.json({ ok: true, theme: publicThemeView(slug, definition, state.saved.values[slug]) });
+  } catch (error) {
+    themeRouteError(res, error);
+  }
+});
+app.put('/api/admin/themes/:slug/settings', auth, requirePermission('themes.manage'), async (req, res) => {
+  try {
+    const slug = req.params.slug;
+    if (!safeThemeSlug(slug)) throw new ThemeError('THEME_NOT_FOUND', 'Theme not found.', 404);
+    const { definition } = await readThemeDefinition(themesRoot, slug);
+    const values = normalizeThemeValues(definition, req.body?.values);
+    const state = await resolveThemeState();
+    state.saved.values[slug] = values;
+    await saveThemeState(state.saved);
+    res.json({ ok: true, values, active: state.saved.active === slug });
+  } catch (error) {
+    themeRouteError(res, error);
+  }
+});
+app.post('/api/admin/themes/backup', auth, requirePermission('themes.manage'), async (req, res) => {
+  try {
+    const backup = await createBackup();
+    console.log(`Backup creado exitosamente: ${backup.name}`);
+    res.status(201).json({ ok: true, name: backup.name });
+  } catch (error) {
+    themeRouteError(res, error, 'Could not create the pre-install backup.');
+  }
+});
+app.post('/api/admin/themes/install', auth, requirePermission('themes.manage'), uploadLimiter,
+  (req, res, next) => themeUpload.single('theme')(req, res, (error) => {
+    if (!error) return next();
+    const code = error instanceof ThemeError ? error.code : error.code === 'LIMIT_FILE_SIZE'
+      ? 'THEME_ZIP_TOO_LARGE' : 'THEME_UPLOAD_REJECTED';
+    console.error('[Teralth Wiki] Theme upload was rejected', code);
+    const status = error instanceof ThemeError ? error.status : error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    const message = error instanceof ThemeError ? error.message : error.code === 'LIMIT_FILE_SIZE'
+      ? 'The theme ZIP cannot exceed 25 MB.' : 'Select one valid theme ZIP file.';
+    return res.status(status).json({ error: message });
+  }),
+  async (req, res) => {
+    try {
+      if (!req.file) throw new ThemeError('THEME_ZIP_REQUIRED', 'Select a theme ZIP file.');
+      const theme = await installThemeZip(req.file.buffer, themesRoot);
+      res.status(201).json({ ok: true, theme });
+    } catch (error) {
+      themeRouteError(res, error, 'The theme could not be installed. The active theme was not changed.');
+    }
+  },
+);
+app.delete('/api/admin/themes/:slug', auth, requirePermission('themes.manage'), async (req, res) => {
+  try {
+    const slug = req.params.slug;
+    if (!safeThemeSlug(slug)) throw new ThemeError('THEME_NOT_FOUND', 'Theme not found.', 404);
+    const state = await resolveThemeState();
+    if (slug === DEFAULT_THEME) throw new ThemeError('THEME_DELETE_FORBIDDEN', 'The Default theme cannot be deleted.', 400);
+    if (state.saved.active === slug) throw new ThemeError('THEME_ACTIVE_DELETE_FORBIDDEN', 'Activate another theme before deleting this one.', 409);
+    await removeTheme(themesRoot, slug);
+    delete state.saved.values[slug];
+    await saveThemeState(state.saved);
+    res.json({ ok: true });
+  } catch (error) {
+    themeRouteError(res, error);
+  }
+});
 app.get('/api/config', async (req, res, next) => {
   try {
     const settings = await query(
@@ -2015,6 +2294,7 @@ app.get('/api/config', async (req, res, next) => {
         sidebarLabel: storedSite.sidebarLabel || 'Documentation',
       },
       languageCatalog = languageCatalogRow ? json(languageCatalogRow.setting_value) : defaultLanguageCatalog;
+    const themeState = await resolveThemeState();
     res.json({
       site,
       languages,
@@ -2024,6 +2304,7 @@ app.get('/api/config', async (req, res, next) => {
         : [],
       spaces,
       registrationEnabled: registration ? Boolean(json(registration.setting_value)) : false,
+      theme: publicThemeView(themeState.saved.active, themeState.definition, themeState.values),
       captcha: publicCaptchaConfig(
         settings.find((item) => item.setting_key === 'captcha_settings')
           ? json(settings.find((item) => item.setting_key === 'captcha_settings').setting_value)
@@ -3137,8 +3418,22 @@ app.get(
         (await listBackups()).every((item) => item.name !== name)
       )
         return res.status(404).json({ error: 'Copia de seguridad no encontrada.' });
-      const directory = path.join(backupRoot, name),
+      const encryptedPath = path.join(backupRoot, `${name}.enc`);
+      let zip;
+      try {
+        const stat = await fs.promises.lstat(encryptedPath);
+        if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('BACKUP_ARCHIVE_INVALID');
+        zip = await decryptBackupArchive(
+          encryptedPath,
+          process.env.BACKUP_ENCRYPTION_KEY || process.env.SESSION_SECRET,
+        );
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        const directory = path.join(backupRoot, name),
+          stat = await fs.promises.lstat(directory);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('BACKUP_ARCHIVE_INVALID');
         zip = await createBackupZipStream(directory, name);
+      }
       res.set({
         'Content-Type': 'application/zip',
         'Content-Disposition': 'attachment; filename="' + name + '.zip"',
@@ -3175,6 +3470,7 @@ app.post(
     }),
   async (req, res, next) => {
     let stage = '',
+      restoredThemeStage = '',
       databaseRestored = false;
     try {
       if (!req.file)
@@ -3182,7 +3478,8 @@ app.post(
       stage = path.join(backupRoot, '.restore-' + crypto.randomUUID());
       await fs.promises.mkdir(stage, { mode: 0o700 });
       const uploadPath = generatedUploadPath(req.file, backupRoot, /^\.upload-[0-9a-f-]{36}\.zip$/);
-      const parsed = await readBackupZip(uploadPath, stage);
+      const parsed = await readBackupZip(uploadPath, stage, themesRoot);
+      restoredThemeStage = parsed.themeStage || '';
       let snapshot;
       try {
         snapshot = JSON.parse(
@@ -3198,6 +3495,7 @@ app.post(
       await restoreDatabaseSnapshot(snapshot);
       databaseRestored = true;
       await applyStagedBackupImages(stage);
+      await applyStagedBackupThemes(restoredThemeStage);
       const [restoredSchedule] = await query(
         "SELECT setting_value FROM settings WHERE setting_key='backup_settings'",
       );
@@ -3264,6 +3562,8 @@ app.post(
       }
     } finally {
       await removeTemporaryUpload(req.file, backupRoot, /^\.upload-[0-9a-f-]{36}\.zip$/);
+      if (restoredThemeStage)
+        await fs.promises.rm(restoredThemeStage, { recursive: true, force: true }).catch(() => {});
       if (stage && stage.startsWith(backupRoot + path.sep))
         await fs.promises.rm(stage, { recursive: true, force: true }).catch(() => {});
     }
@@ -3298,6 +3598,7 @@ const rolePermissionKeys = [
   'backups.schedule',
   'updates.install',
   'logs.view',
+  'themes.manage',
   'header_links.create_edit',
   'header_links.delete',
 ];
