@@ -118,3 +118,15 @@ CREATE TABLE IF NOT EXISTS rate_limit_buckets (
   reset_at BIGINT UNSIGNED NOT NULL,
   KEY idx_rate_limit_reset (reset_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS admin_logs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  occurred_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actor_user_id BIGINT UNSIGNED NULL,
+  username VARCHAR(60) NOT NULL,
+  action_key VARCHAR(80) NOT NULL,
+  detail VARCHAR(180) NOT NULL DEFAULT '',
+  KEY idx_admin_logs_date (occurred_at,id),
+  KEY idx_admin_logs_user_date (username,occurred_at,id),
+  KEY idx_admin_logs_action_date (action_key,occurred_at,id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -187,6 +187,7 @@ const rolePermissionKeys = [
   'backups.export',
   'backups.schedule',
   'updates.install',
+  'logs.view',
   'header_links.create_edit',
   'header_links.delete',
 ];
@@ -363,7 +364,7 @@ const pathParts = () => {
     return ['__invalid_path__', 'not-found'];
   }
 };
-const adminTabKeys = ['pages', 'categories', 'header-links', 'settings', 'spaces', 'languages', 'users', 'roles', 'proxy', 'smtp', 'backups', 'captcha', 'updates'];
+const adminTabKeys = ['pages', 'categories', 'header-links', 'settings', 'spaces', 'languages', 'users', 'roles', 'proxy', 'smtp', 'backups', 'captcha', 'logs', 'updates'];
 function adminUrl(tab = 'pages', space = state.space) {
   const section = adminTabKeys.includes(tab) ? tab : 'pages';
   return `/admin/${section}?space=${encodeURIComponent(space || 'main')}`;
@@ -2163,6 +2164,7 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
         ['backups.import', 'backups.export', 'backups.schedule'],
       ],
       ['captcha', t('Captcha', 'Captcha'), ['captcha.configure']],
+      ['logs', t('Registros', 'Logs'), ['logs.view']],
       ['updates', t('Update', 'Update'), ['updates.install']],
     ],
     visible = tabDefs.filter(([, label, permissions]) => canAny(permissions));
@@ -2184,7 +2186,7 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
   const icons = {
     pages: 'file-lines', categories: 'folder-tree', 'header-links': 'link', settings: 'sliders', spaces: 'layer-group', languages: 'language',
     users: 'users', roles: 'user-shield', proxy: 'network-wired', smtp: 'envelope',
-    backups: 'database', captcha: 'shield-halved', updates: 'cloud-arrow-up',
+    backups: 'database', captcha: 'shield-halved', logs: 'clipboard-list', updates: 'cloud-arrow-up',
   };
   const navigation = $('#adminNavigation');
   navigation.setAttribute('aria-label', t('Administración', 'Administration'));
@@ -2209,6 +2211,7 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
     if (tab === 'smtp') await smtpTab(content);
     if (tab === 'captcha') await captchaTab(content);
     if (tab === 'backups') await backupsTab(content);
+    if (tab === 'logs') await logsTab(content);
     if (tab === 'updates') {
       const updatesModule = await loadAdminUpdatesModule();
       await updatesModule.render(content, { api, t, esc, showError, csrf: state.csrf });
@@ -2968,6 +2971,7 @@ async function usersTab(root) {
               'backups.schedule',
               'captcha.configure',
               'updates.install',
+              'logs.view',
               'header_links.create_edit',
               'header_links.delete',
             ])
@@ -3051,6 +3055,108 @@ async function usersTab(root) {
       }),
   );
 }
+async function logsTab(root) {
+  root.innerHTML = `<section class="admin-section audit-log-section"><div class="audit-log-heading"><div><h2>${t('Registro de actividad', 'Activity log')}</h2><p>${t('Consulta los cambios administrativos registrados. Se muestran 10 eventos por página.', 'Review recorded administrative changes. Each page shows 10 events.')}</p></div><div class="audit-log-search"><label class="sr-only" for="auditLogSearch">${t('Buscar por usuario o acción', 'Search by user or action')}</label><input class="settings-input" id="auditLogSearch" type="search" maxlength="100" placeholder="${t('Ingrese una búsqueda', 'Enter a search')}"><button class="primary-button" id="auditLogSearchButton" type="button" aria-label="${t('Buscar registros', 'Search logs')}"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i></button></div></div><div class="audit-log-count" id="auditLogCount" aria-live="polite"></div><div class="audit-log-table-wrap"><table class="audit-log-table"><thead><tr><th scope="col">${t('N.º de registro', 'Log #')}</th><th scope="col">${t('Fecha y hora', 'Date and time')}</th><th scope="col">${t('Usuario', 'User')}</th><th scope="col">${t('Acción realizada', 'Action')}</th></tr></thead><tbody id="auditLogRows"></tbody></table></div><nav class="audit-log-pagination" id="auditLogPagination" aria-label="${t('Páginas de registros', 'Log pages')}"></nav></section>`;
+  const searchInput = $('#auditLogSearch', root),
+    rows = $('#auditLogRows', root),
+    pager = $('#auditLogPagination', root),
+    count = $('#auditLogCount', root);
+  let currentPage = 1,
+    totalPages = 1,
+    searchTerm = '';
+  const actionNames = {
+    'pages.created': ['Se creó la página', 'Created page'],
+    'page.created': ['Se creó la página', 'Created page'],
+    'pages.updated': ['Se actualizó la página', 'Updated page'],
+    'pages.deleted': ['Se eliminó la página', 'Deleted page'],
+    'categories.created': ['Se creó la categoría', 'Created category'],
+    'categories.updated': ['Se actualizó la categoría', 'Updated category'],
+    'categories.deleted': ['Se eliminó la categoría', 'Deleted category'],
+    'spaces.created': ['Se creó el espacio', 'Created documentation space'],
+    'spaces.updated': ['Se actualizó el espacio', 'Updated documentation space'],
+    'spaces.deleted': ['Se eliminó el espacio', 'Deleted documentation space'],
+    'space.logo.updated': ['Se actualizó el logotipo del espacio', 'Updated documentation space logo'],
+    'site.settings.updated': ['Se actualizaron los ajustes generales', 'Updated general settings'],
+    'registration.updated': ['Se actualizaron los ajustes de registro', 'Updated registration settings'],
+    'languages.updated': ['Se actualizaron los idiomas', 'Updated languages'],
+    'roles.updated': ['Se actualizaron los roles', 'Updated roles'],
+    'user.updated': ['Se actualizó el usuario', 'Updated user'],
+    'user.role.updated': ['Se cambió el rol del usuario', 'Changed user role'],
+    'user.password.reset': ['Se solicitó un restablecimiento de contraseña', 'Requested a password reset'],
+    'user.deleted': ['Se eliminó el usuario', 'Deleted user'],
+    'smtp.updated': ['Se actualizó la configuración SMTP', 'Updated SMTP settings'],
+    'smtp.tested': ['Envió correo de prueba de SMTP', 'Sent an SMTP test email'],
+    'captcha.enabled': ['Activó la verificación CAPTCHA mediante', 'Enabled CAPTCHA verification with'],
+    'captcha.disabled': ['Desactivó la verificación CAPTCHA', 'Disabled CAPTCHA verification'],
+    'captcha.updated': ['Se actualizó la configuración CAPTCHA', 'Updated CAPTCHA settings'],
+    'proxy.updated': ['Se actualizó la configuración del proxy inverso', 'Updated reverse proxy settings'],
+    'backup.imported': ['Se importó una copia de seguridad', 'Imported a backup'],
+    'backup.schedule.updated': ['Se actualizó la programación de copias', 'Updated backup schedule'],
+    'backup.updated': ['Se actualizaron los ajustes de copias de seguridad', 'Updated backup settings'],
+    'update.installed': ['Se instaló una actualización', 'Installed an update'],
+    'home.updated': ['Se cambió la página de inicio', 'Changed the home page'],
+    'navigation.updated': ['Se reordenó la navegación', 'Reordered navigation'],
+    'header-links.updated': ['Se actualizaron los enlaces del encabezado', 'Updated header links'],
+    'media.uploaded': ['Se subió un archivo', 'Uploaded a file'],
+    'admin.change': ['Se realizó un cambio administrativo', 'Completed an administrative change'],
+  };
+  const formatAction = (log) => {
+    const label = actionNames[log.actionKey] || actionNames['admin.change'];
+    if (log.actionKey === 'captcha.enabled')
+      return `${t(label[0], label[1])} ${esc(log.detail)}.`;
+    const detail = log.detail ? `: “${esc(log.detail)}”` : '';
+    return `${t(label[0], label[1])}${detail}.`;
+  };
+  const renderPager = () => {
+    const numbers = totalPages <= 7
+      ? Array.from({ length: totalPages }, (_, index) => index + 1)
+      : currentPage <= 3
+        ? [1, 2, 3, '…', totalPages - 2, totalPages - 1, totalPages]
+        : currentPage === 4
+          ? [1, 2, 3, 4, '…', totalPages - 2, totalPages - 1, totalPages]
+          : currentPage >= totalPages - 3
+            ? [1, 2, 3, '…', totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
+            : [1, '…', currentPage - 1, currentPage, currentPage + 1, '…', totalPages - 2, totalPages - 1, totalPages];
+    const control = (label, target, disabled) => `<button type="button" class="secondary-button" data-log-page="${target}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+    pager.innerHTML = control(t('Inicio', 'Start'), 1, currentPage === 1) +
+      control(t('Anterior', 'Previous'), currentPage - 1, currentPage === 1) +
+      numbers.map((number) => number === '…'
+        ? '<span aria-hidden="true">…</span>'
+        : `<button type="button" class="secondary-button${number === currentPage ? ' active' : ''}" data-log-page="${number}"${number === currentPage ? ' aria-current="page"' : ''}>${number}</button>`).join('') +
+      control(t('Siguiente', 'Next'), currentPage + 1, currentPage === totalPages) +
+      control(t('Fin', 'End'), totalPages, currentPage === totalPages);
+  };
+  const load = async (page = currentPage) => {
+    const result = await api(`/api/admin/logs?page=${page}&search=${encodeURIComponent(searchTerm)}`);
+    currentPage = result.page;
+    totalPages = Math.max(1, Number(result.totalPages) || 1);
+    count.textContent = t(`${result.total} registros`, `${result.total} records`);
+    rows.innerHTML = result.logs.length
+      ? result.logs.map((log) => {
+          const date = new Date(log.occurredAt),
+            formattedDate = Number.isNaN(date.getTime())
+              ? t('Fecha no disponible', 'Date unavailable')
+              : new Intl.DateTimeFormat(state.lang, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+          return `<tr><td>${Number(log.id)}</td><td><time datetime="${esc(log.occurredAt)}">${esc(formattedDate)}</time></td><td>${esc(log.username)}</td><td>${formatAction(log)}</td></tr>`;
+        }).join('')
+      : `<tr><td class="audit-log-empty" colspan="4">${t('No hay registros para mostrar.', 'No log entries to display.')}</td></tr>`;
+    renderPager();
+  };
+  $('#auditLogSearchButton', root).onclick = async () => {
+    searchTerm = searchInput.value.trim();
+    try { await load(1); } catch (error) { showError($('#adminPanel'), error); }
+  };
+  searchInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') event.preventDefault();
+  });
+  pager.onclick = async (event) => {
+    const button = event.target.closest('[data-log-page]');
+    if (!button || button.disabled) return;
+    try { await load(Number(button.dataset.logPage)); } catch (error) { showError($('#adminPanel'), error); }
+  };
+  try { await load(1); } catch (error) { showError($('#adminPanel'), error); }
+}
+
 const ROLE_PERMISSION_GROUPS = [
   [
     'pages',
@@ -3148,6 +3254,12 @@ const ROLE_PERMISSION_GROUPS = [
     'Actualizaciones',
     'Updates',
     [['updates.install', 'Instalar paquetes de actualización', 'Install update packages']],
+  ],
+  [
+    'logs',
+    'Registros',
+    'Logs',
+    [['logs.view', 'Ver registros de actividad', 'View activity logs']],
   ],
 ];
 async function headerLinksTab(root) {
@@ -3327,6 +3439,7 @@ function roleEditorRow(role, expanded = false) {
       'Instala paquetes de actualización firmados.',
       'Install signed update packages.',
     ),
+    logs: t('Consulta el historial de cambios administrativos.', 'Review administrative change history.'),
   };
   return `<article class="role-editor-card" data-role-key="${rowId}" data-system="${system}"><div class="role-line"><div class="role-line-identity"><span class="role-badge role-line-badge" style="--role-color:${esc(color)}">${name}</span>${system ? `<span class="role-system-lock"><i class="fa-solid fa-lock"></i> ${t('Rol del sistema', 'System role')}</span>` : ''}</div><div class="role-line-actions"><button type="button" class="secondary-button edit-role" aria-expanded="${expanded}"><i class="fa-solid fa-pen"></i> ${t('Editar', 'Edit')}</button>${system ? '' : `<button type="button" class="danger-button remove-role"><i class="fa-solid fa-trash"></i></button>`}</div></div><div class="role-edit-panel" ${expanded ? '' : 'hidden'}><div class="role-editor-fields"><label><span class="admin-label">${t('Nombre del rol', 'Role name')}</span><input class="settings-input" data-role-name maxlength="80" value="${esc(role.name || '')}" ${system ? 'readonly' : ''}></label><label><span class="admin-label">${t('Color del badge', 'Badge color')}</span><input type="color" data-role-color value="${esc(color)}" ${system ? 'disabled' : ''}></label><span class="role-badge role-preview" style="--role-color:${esc(color)}">${name}</span></div><label class="role-permission-all"><input type="checkbox" data-permission-all ${permissions.length === rolePermissionKeys.length ? 'checked' : ''} ${system ? 'disabled' : ''}><strong>${t('Todos los permisos', 'All permissions')}</strong></label><label class="role-permission-admin-view"><input type="checkbox" data-permission="admin.view" ${permissions.includes('admin.view') ? 'checked' : ''} ${system ? 'disabled' : ''}><span><strong>${t('Ver panel de administrador', 'View administrator panel')}</strong><small>${t('Mostrar el engranaje y permitir el acceso al panel.', 'Show the gear and allow access to the admin panel.')}</small></span></label><div class="role-permissions">${ROLE_PERMISSION_GROUPS.map(
     ([key, es, en, items]) => {

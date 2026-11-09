@@ -18,10 +18,14 @@ permissions:
 
 jobs:
   validate:
-    name: Security and application tests
+    name: Validate before publishing
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
     steps:
-      - name: Check out source
+      - name: Check out source and history
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release_tag || github.ref }}
@@ -34,10 +38,7 @@ jobs:
           node-version: 24
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Validate release tag and source branch
+      - name: Phase 1 - verify source, GitHub environment, and token policy
         env:
           RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
@@ -55,23 +56,112 @@ jobs:
             exit 1
           fi
 
-      - name: Build production assets
-        run: npm run build:assets
+          node --version
+          npm --version
+          npm ci
+          npm ls --depth=0
 
-      - name: Audit dependencies
+          if [[ ! -f .env.example ]] || ! git ls-files --error-unmatch .env.example >/dev/null 2>&1; then
+            echo "A tracked .env.example is required; keep real credentials in an untracked .env file." >&2
+            exit 1
+          fi
+          tracked_env_files="$(git ls-files | grep -E '(^|/)\.env([^/]*)$' | grep -Ev '(^|/)\.env\.example$' || true)"
+          if [[ -n "$tracked_env_files" ]]; then
+            echo "Environment files containing secrets must not be committed:" >&2
+            printf '%s\n' "$tracked_env_files" >&2
+            exit 1
+          fi
+
+      - name: Phase 2 - build and run code tests
+        run: |
+          set -euo pipefail
+          npm run build:assets
+          node --test tests/unit/*.test.js
+
+      - name: Phase 3 - audit dependencies
         run: npm audit --audit-level=low
 
-      - name: Run unit tests
-        run: node --test tests/unit/*.test.js
+      - name: Set up Go for secret scanning
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+
+      - name: Scan tracked Git history for leaked secrets
+        run: |
+          set -euo pipefail
+          go install github.com/zricethezav/gitleaks/v8@v8.24.2
+          "$(go env GOPATH)/bin/gitleaks" git --log-opts=--all --redact --exit-code 1
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          build-mode: none
+          queries: security-extended
+
+      - name: Analyze with CodeQL
+        id: codeql
+        uses: github/codeql-action/analyze@v3
+        with:
+          post-processed-sarif-path: ${{ runner.temp }}/codeql-results
+
+      - name: Fail if CodeQL reports security findings
+        env:
+          SARIF_DIRECTORY: ${{ runner.temp }}/codeql-results
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          directory = pathlib.Path(os.environ["SARIF_DIRECTORY"])
+          sarif_files = sorted(directory.rglob("*.sarif")) if directory.exists() else []
+          if not sarif_files:
+              sys.exit("CodeQL did not produce SARIF results; refusing to publish.")
+
+          findings = []
+          for sarif_file in sarif_files:
+              report = json.loads(sarif_file.read_text(encoding="utf-8"))
+              for run in report.get("runs", []):
+                  rules = {
+                      rule.get("id"): rule.get("name", rule.get("id", "unknown"))
+                      for rule in run.get("tool", {}).get("driver", {}).get("rules", [])
+                  }
+                  for result in run.get("results", []):
+                      location = (result.get("locations") or [{}])[0]
+                      physical = location.get("physicalLocation", {})
+                      artifact = physical.get("artifactLocation", {}).get("uri", "unknown")
+                      line = physical.get("region", {}).get("startLine", "?")
+                      rule_id = result.get("ruleId", "unknown")
+                      findings.append(
+                          f"{artifact}:{line}: {rules.get(rule_id, rule_id)}"
+                      )
+
+          if findings:
+              print("CodeQL findings must be resolved before a release:", file=sys.stderr)
+              print("\n".join(findings), file=sys.stderr)
+              sys.exit(1)
+          print("CodeQL produced no security findings.")
+          PY
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps
 
-      - name: Run all Playwright tests
+      - name: Phase 4 - run all Playwright tests
         run: npx playwright test
 
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 30
+
   publish:
-    name: Build and publish signed ZIP
+    name: Phase 5 - publish signed GitHub Release
     needs: validate
     runs-on: ubuntu-latest
     permissions:
@@ -160,16 +250,18 @@ jobs:
           IS_PRERELEASE: ${{ steps.package.outputs.is_prerelease }}
         run: |
           set -euo pipefail
+          beta_notes="Advertencia: versión beta experimental desde la rama beta. Instálala y úsala bajo tu propio riesgo."
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "releases/${RELEASE_TAG}.zip" --clobber
             if [[ "$IS_PRERELEASE" == true ]]; then
-              gh release edit "$RELEASE_TAG" --prerelease
+              gh release edit "$RELEASE_TAG" --prerelease --notes "$beta_notes"
             fi
           elif [[ "$IS_PRERELEASE" == true ]]; then
             gh release create "$RELEASE_TAG" "releases/${RELEASE_TAG}.zip" \
               --verify-tag \
               --title "$RELEASE_TAG" \
               --generate-notes \
+              --notes "$beta_notes" \
               --prerelease
           else
             gh release create "$RELEASE_TAG" "releases/${RELEASE_TAG}.zip" \

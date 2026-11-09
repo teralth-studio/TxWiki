@@ -153,7 +153,7 @@ for (const width of [1440, 390]) {
     await page.goto(`${origin}/admin`);
     await expect(page.locator('#pageRows .edit-page')).toBeVisible();
     if (width < 680) await page.locator('#openSidebar').click();
-    await expect(page.locator('#adminNavigation [data-tab]')).toHaveCount(13);
+    await expect(page.locator('#adminNavigation [data-tab]')).toHaveCount(14);
     await expect(page.locator('#spacePicker')).toBeHidden();
     await expect(page.locator('#searchInput')).toBeHidden();
     await expect(page.locator('#supportCard')).toBeHidden();
@@ -198,6 +198,43 @@ test('admin section URL opens the requested tab and keeps its space', async ({ p
   await page.goto(`${origin}/admin/users?space=main`);
   await expect(page.locator('#adminNavigation [data-tab="users"]')).toHaveAttribute('aria-current', 'page');
   await expect(page).toHaveURL(/\/admin\/users\?space=main$/);
+});
+
+test('activity logs search only on click and paginate ten records at a time', async ({ page }) => {
+  const requests = [];
+  await page.route('**/api/admin/logs*', async route => {
+    const url = new URL(route.request().url()),
+      pageNumber = Number(url.searchParams.get('page') || 1),
+      search = url.searchParams.get('search') || '';
+    requests.push({ page: pageNumber, search });
+    const total = search ? 1 : 120,
+      logs = search
+        ? [{ id: 120, occurredAt: '2026-11-08T12:00:00Z', username: 'Admin', actionKey: 'captcha.enabled', detail: 'Cloudflare Turnstile' }]
+        : Array.from({ length: 10 }, (_, index) => ({
+            id: 120 - (pageNumber - 1) * 10 - index,
+            occurredAt: '2026-11-08T12:00:00Z',
+            username: `Admin ${pageNumber}`,
+            actionKey: 'smtp.tested',
+            detail: '',
+          }));
+    await route.fulfill({ json: { logs, page: pageNumber, total, totalPages: Math.ceil(total / 10) } });
+  });
+  await page.goto(`${origin}/admin`);
+  await page.locator('#adminNavigation [data-tab="logs"]').click();
+  await expect(page.getByRole('columnheader', { name: 'Log #' })).toBeVisible();
+  await expect(page.locator('#auditLogRows tr')).toHaveCount(10);
+  await expect(page.locator('#auditLogPagination')).toContainText('12');
+  await page.locator('#auditLogPagination').getByRole('button', { name: 'Next' }).click();
+  await expect.poll(() => requests.at(-1)?.page).toBe(2);
+  await expect(page.locator('#auditLogRows')).toContainText('Admin 2');
+  const search = page.locator('#auditLogSearch');
+  await search.fill('admin');
+  await search.press('Enter');
+  await expect.poll(() => requests.length).toBe(2);
+  await page.locator('#auditLogSearchButton').click();
+  await expect.poll(() => requests.at(-1)).toEqual({ page: 1, search: 'admin' });
+  await expect(page.locator('#auditLogRows tr')).toHaveCount(1);
+  await expect(page.locator('#auditLogRows')).toContainText('Enabled CAPTCHA verification with Cloudflare Turnstile.');
 });
 
 test('administration navigation respects permissions', async ({ page }) => {
@@ -268,6 +305,7 @@ test('role editor groups current permissions and preserves selection on save', a
   await page.locator('#adminNavigation [data-tab="roles"]').click();
   const editor = page.locator('[data-role-key="editor"]');
   await editor.locator('.edit-role').click();
+  await expect(editor.locator('[data-permission="logs.view"]')).toBeVisible();
   await expect(editor.locator('[data-permission-group="languages"]')).toBeVisible();
   await expect(editor.locator('[data-permission="settings.identity"]')).toBeChecked();
   await editor.locator('[data-permission="settings.support"]').check();
