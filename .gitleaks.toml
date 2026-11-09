@@ -1,0 +1,6 @@
+[allowlist]
+description = "RFC 6238 TOTP test vector, not a credential"
+regexTarget = "secret"
+regexes = [
+  '''^GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ$''',
+]
