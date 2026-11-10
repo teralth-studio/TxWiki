@@ -60,6 +60,12 @@ async function addSource(zip, source, archivePath) {
       const currentArchiveDirectory = relativeFolder
         ? `${archivePath}/${relativeFolder}`
         : archivePath;
+      // These are distributable template assets, not user themes. They ship
+      // with application code and are regenerated/replaced by releases.
+      if (
+        currentArchiveDirectory.endsWith('/application/themes') &&
+        (entry.name === 'README.md' || entry.name === 'teralth-default-theme-source.zip')
+      ) continue;
       if (entry.name === DEFAULT_THEME &&
           (currentArchiveDirectory === 'application/themes' ||
             currentArchiveDirectory.endsWith('/application/themes'))) continue;

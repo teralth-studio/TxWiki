@@ -47,6 +47,8 @@ test('backup archives include selected source files and the encrypted database',
   await fs.promises.writeFile(path.join(legacyDefault, 'theme.css'), 'body { color: black; }');
   await fs.promises.writeFile(path.join(customTheme, 'settings.json'), '{}');
   await fs.promises.writeFile(path.join(customTheme, 'theme.css'), 'body { color: black; }');
+  await fs.promises.writeFile(path.join(directory, 'themes', 'README.md'), 'theme source docs');
+  await fs.promises.writeFile(path.join(directory, 'themes', 'teralth-default-theme-source.zip'), 'source archive');
 
   const stream = await createBackupZipStreamFromSources(
     'fixture',
