@@ -19,3 +19,7 @@ copy('@fontsource-variable/dm-sans/files/dm-sans-latin-wght-italic.woff2', 'publ
 copy('@fontsource-variable/dm-sans/LICENSE', 'public/assets/fonts/LICENSE-DM-Sans');
 copy('@fontsource-variable/manrope/files/manrope-latin-wght-normal.woff2', 'public/assets/fonts/manrope-latin-wght-normal.woff2');
 copy('@fontsource-variable/manrope/LICENSE', 'public/assets/fonts/LICENSE-Manrope');
+require('./theme-source-package').writeThemeSourceArchive(root).catch((error) => {
+  console.error('Could not build the editable Default theme source ZIP:', error.code || 'THEME_SOURCE_BUILD_FAILED');
+  process.exitCode = 1;
+});

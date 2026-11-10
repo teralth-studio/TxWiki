@@ -6,6 +6,7 @@ const yauzl = require('yauzl');
 const postcss = require('postcss');
 const lightningcss = require('lightningcss');
 const sharp = require('sharp');
+const { ensureThemeSourceArchive } = require('./theme-source-package');
 
 const DEFAULT_THEME = 'default';
 const DEFAULT_THEME_ROOT = path.join(__dirname, 'default-theme');
@@ -38,6 +39,7 @@ body.light {
   ],
 ]);
 let defaultThemeFilesPromise;
+const loggedDefaultFallbacks = new Set();
 const MAX_ZIP_BYTES = 25 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 20 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
@@ -485,6 +487,83 @@ async function ensureDefaultThemeFiles() {
   return defaultThemeFilesPromise;
 }
 
+function bundledDefaultTheme() {
+  const definition = normalizeThemeDefinition(JSON.parse(DEFAULT_THEME_FILES.get('settings.json')));
+  return {
+    directory: null,
+    definition,
+    stylesheet: scopeThemeCss(DEFAULT_THEME_FILES.get('theme.css'), DEFAULT_THEME),
+  };
+}
+
+async function ensureProjectDefaultTheme(themesRoot) {
+  let rootStat;
+  try { rootStat = await fs.promises.lstat(themesRoot); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    await fs.promises.mkdir(themesRoot, { recursive: true, mode: 0o750 });
+    rootStat = await fs.promises.lstat(themesRoot);
+  }
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory())
+    fail('THEME_ROOT_INVALID', 'The themes directory is not safe.', 500);
+
+  let directory = await findDirectoryEntry(themesRoot, DEFAULT_THEME);
+  if (!directory) {
+    const target = path.join(themesRoot, DEFAULT_THEME);
+    try { await fs.promises.mkdir(target, { mode: 0o750 }); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    directory = await findDirectoryEntry(themesRoot, DEFAULT_THEME);
+  }
+  if (!directory) fail('THEME_DEFAULT_MISSING', 'The project Default theme folder is missing.', 500);
+
+  for (const [name, content] of DEFAULT_THEME_FILES) {
+    if (await findFileEntry(directory.path, name)) continue;
+    let handle;
+    try {
+      handle = await fs.promises.open(
+        path.join(directory.path, name),
+        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | (fs.constants.O_NOFOLLOW || 0),
+        0o640,
+      );
+      await handle.writeFile(content);
+      await handle.sync();
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    } finally {
+      await handle?.close();
+    }
+  }
+  return directory;
+}
+
+async function resolveDefaultThemeSource(themesRoot) {
+  try {
+    const projectTheme = await ensureProjectDefaultTheme(themesRoot);
+    try { await ensureThemeSourceArchive(themesRoot); }
+    catch (error) { logDefaultFallback(error); }
+    const validated = await validateThemeFiles(projectTheme.path, DEFAULT_THEME);
+    return { directory: projectTheme.path, ...validated };
+  } catch (error) {
+    logDefaultFallback(error);
+  }
+
+  try {
+    const internalTheme = await ensureDefaultThemeFiles();
+    const validated = await validateThemeFiles(internalTheme.path, DEFAULT_THEME);
+    return { directory: internalTheme.path, ...validated };
+  } catch (error) {
+    logDefaultFallback(error);
+    return bundledDefaultTheme();
+  }
+}
+
+function logDefaultFallback(error) {
+  const code = error instanceof ThemeError ? error.code : 'THEME_DEFAULT_INVALID';
+  if (loggedDefaultFallbacks.has(code)) return;
+  loggedDefaultFallbacks.add(code);
+  console.error('[Teralth Wiki] Project Default theme unavailable; using bundled fallback.', code);
+}
+
 async function installThemeZip(buffer, themesRoot) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 22 || buffer.length > MAX_ZIP_BYTES)
     fail('THEME_ZIP_SIZE_INVALID', 'The theme ZIP must be between 22 bytes and 25 MB.');
@@ -555,8 +634,8 @@ async function installThemeZip(buffer, themesRoot) {
 async function readThemeDefinition(themesRoot, slug) {
   if (!safeThemeSlug(slug)) fail('THEME_NOT_FOUND', 'Theme not found.', 404);
   if (slug === DEFAULT_THEME) {
-    const found = await ensureDefaultThemeFiles();
-    return validateThemeFiles(found.path, DEFAULT_THEME);
+    const { definition, stylesheet } = await resolveDefaultThemeSource(themesRoot);
+    return { definition, stylesheet };
   }
   const root = await fs.promises.realpath(themesRoot);
   const found = await findDirectoryEntry(root, slug);
@@ -608,15 +687,20 @@ async function readThemeAsset(themesRoot, slug, rawAssetPath) {
   if (!(relative === 'theme.css' || relative === 'preview.png' || relative.startsWith('assets/'))) return null;
   if (relative !== 'theme.css' && relative !== 'preview.png' && !ASSET_EXTENSIONS.has(path.extname(relative).toLowerCase())) return null;
   let directory;
+  let defaultStylesheet = '';
   if (slug === DEFAULT_THEME) {
-    const found = await ensureDefaultThemeFiles();
-    directory = found.path;
+    const source = await resolveDefaultThemeSource(themesRoot);
+    directory = source.directory;
+    defaultStylesheet = source.stylesheet;
   } else {
     const root = await fs.promises.realpath(themesRoot);
     const found = await findDirectoryEntry(root, slug);
     if (!found) return null;
     directory = found.path;
   }
+  if (slug === DEFAULT_THEME && !directory && relative === 'theme.css')
+    return { buffer: Buffer.from(defaultStylesheet), contentType: 'text/css; charset=utf-8' };
+  if (slug === DEFAULT_THEME && !directory) return null;
   const candidate = await resolveThemeFile(directory, segments);
   if (!candidate) return null;
   let buffer;

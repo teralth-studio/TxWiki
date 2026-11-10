@@ -39,6 +39,7 @@ const { normalizeSiteOptions, normalizeSupportUrl } = require('./scripts/site-se
 const { HEADER_LINK_LIMIT, normalizeHeaderLink, normalizeHeaderLinks } = require('./scripts/header-links');
 const { migrateSitePermissions } = require('./scripts/role-permissions');
 const { createAdminAuditMiddleware } = require('./scripts/admin-audit-log');
+const { ARCHIVE_NAME: themeSourceArchiveName, ensureThemeSourceArchive } = require('./scripts/theme-source-package');
 const {
   DEFAULT_THEME,
   ThemeError,
@@ -2114,6 +2115,17 @@ async function applyStagedBackupThemes(directory) {
     await fs.promises.rename(previous, root).catch(() => {});
     throw error;
   }
+  // The project copy of Default is shipped with the application, not stored
+  // in user backups. Preserve the installed copy while restoring custom themes.
+  const projectDefault = path.join(previous, DEFAULT_THEME);
+  try {
+    const stat = await fs.promises.lstat(projectDefault);
+    if (stat.isDirectory() && !stat.isSymbolicLink())
+      await fs.promises.rename(projectDefault, path.join(root, DEFAULT_THEME));
+  } catch (error) {
+    if (error.code !== 'ENOENT')
+      console.error('[Teralth Wiki] Project Default theme could not be preserved during restore.', error.code || 'THEME_RESTORE_FAILED');
+  }
   await fs.promises.rm(previous, { recursive: true, force: true }).catch((error) =>
     console.error('[Teralth Wiki] Previous theme directory cleanup failed', error.code || 'THEME_CLEANUP_FAILED'),
   );
@@ -2201,6 +2213,19 @@ app.get('/api/admin/themes', auth, requirePermission('themes.manage'), async (re
     res.set('Cache-Control', 'private, no-store').json({ active: state.saved.active, themes });
   } catch (error) {
     themeRouteError(res, error);
+  }
+});
+app.get('/api/admin/themes/source.zip', auth, requirePermission('themes.manage'), async (req, res) => {
+  try {
+    await readThemeDefinition(themesRoot, DEFAULT_THEME);
+    const archive = await ensureThemeSourceArchive(themesRoot);
+    res.set('Cache-Control', 'private, no-store');
+    res.download(archive, themeSourceArchiveName, (error) => {
+      if (error && !res.headersSent)
+        themeRouteError(res, error, 'The editable theme source could not be downloaded.');
+    });
+  } catch (error) {
+    themeRouteError(res, error, 'The editable theme source could not be downloaded.');
   }
 });
 app.put('/api/admin/themes/active', auth, requirePermission('themes.manage'), async (req, res) => {

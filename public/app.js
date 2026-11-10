@@ -36,6 +36,19 @@ let loadingDepth = 0,
   searchMatches = [],
   searchSelection = -1;
 let sweetAlertLoadPromise = null;
+function themedSweetAlertArgs(args) {
+  const [options, ...rest] = args;
+  if (!options || typeof options !== 'object' || Array.isArray(options)) return args;
+  const customClass = options.customClass && typeof options.customClass === 'object' && !Array.isArray(options.customClass)
+    ? { ...options.customClass }
+    : {};
+  const addClasses = (current, required) =>
+    [...new Set(`${typeof current === 'string' ? current : ''} ${required}`.trim().split(/\s+/).filter(Boolean))].join(' ');
+  customClass.popup = addClasses(customClass.popup, 'wiki-swal-popup');
+  customClass.title = addClasses(customClass.title, 'wiki-swal-title');
+  customClass.htmlContainer = addClasses(customClass.htmlContainer, 'wiki-swal-body');
+  return [{ ...options, customClass }, ...rest];
+}
 const lazySweetAlert = {
   fire(...args) {
     if (!sweetAlertLoadPromise) {
@@ -54,16 +67,21 @@ const lazySweetAlert = {
         script.src = '/vendor/sweetalert/sweetalert2.all.min.js';
         script.async = true;
         script.onload = () =>
-          cssLoaded.then(() =>
-            window.Swal !== lazySweetAlert
-              ? resolve(window.Swal)
-              : reject(new Error('SweetAlert did not initialize.')),
-          );
+          cssLoaded.then(() => {
+            const library = window.Swal;
+            if (!library || library === lazySweetAlert || typeof library.fire !== 'function') {
+              reject(new Error('SweetAlert did not initialize.'));
+              return;
+            }
+            const originalFire = library.fire.bind(library);
+            library.fire = (...fireArgs) => originalFire(...themedSweetAlertArgs(fireArgs));
+            resolve(library);
+          });
         script.onerror = () => reject(new Error('SweetAlert could not be loaded.'));
         document.head.append(script);
       });
     }
-    return sweetAlertLoadPromise.then((library) => library.fire(...args));
+    return sweetAlertLoadPromise.then((library) => library.fire(...themedSweetAlertArgs(args)));
   },
 };
 window.Swal = lazySweetAlert;
@@ -2282,7 +2300,7 @@ async function themesTab(root) {
   const htmlT = (spanish, english) => esc(t(spanish, english));
   const load = async () => {
     const result = await api('/api/admin/themes');
-    const heading = `<section class="theme-admin-intro"><div class="theme-admin-heading"><div><span class="theme-admin-kicker">${htmlT('Apariencia de la wiki', 'WIKI APPEARANCE')}</span><h2>${htmlT('Temas de wiki', 'Wiki themes')}</h2><p>${htmlT('Personaliza la apariencia de la wiki sin modificar su contenido ni sus funciones.', 'Customize the wiki appearance without changing its content or features.')}</p></div><div class="theme-admin-heading-actions"><span class="theme-count-badge"><i class="fa-solid fa-layer-group"></i> ${htmlT('Temas instalados', 'Themes installed')}: ${result.themes.length}</span><button class="primary-button" type="button" data-install-theme><i class="fa-solid fa-file-arrow-up"></i> ${htmlT('Instalar tema', 'Install theme')}</button></div></div></section>`;
+    const heading = `<section class="theme-admin-intro"><div class="theme-admin-heading"><div><span class="theme-admin-kicker">${htmlT('Apariencia de la wiki', 'WIKI APPEARANCE')}</span><h2>${htmlT('Temas de wiki', 'Wiki themes')}</h2><p>${htmlT('Personaliza la apariencia de la wiki sin modificar su contenido ni sus funciones.', 'Customize the wiki appearance without changing its content or features.')}</p></div><div class="theme-admin-heading-actions"><span class="theme-count-badge"><i class="fa-solid fa-layer-group"></i> ${htmlT('Temas instalados', 'Themes installed')}: ${result.themes.length}</span><a class="secondary-button" href="/api/admin/themes/source.zip"><i class="fa-solid fa-file-arrow-down"></i> ${htmlT('Descargar plantilla HTML/CSS', 'Download HTML/CSS template')}</a><button class="primary-button" type="button" data-install-theme><i class="fa-solid fa-file-arrow-up"></i> ${htmlT('Instalar tema', 'Install theme')}</button></div></div></section>`;
     const cards = result.themes.map((theme) => {
       const active = theme.slug === result.active;
       const preview = theme.previewUrl

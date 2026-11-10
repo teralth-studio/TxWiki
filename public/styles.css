@@ -10040,3 +10040,110 @@ body.wiki-mode .shell:has(#articleWrap:not([hidden])) .sidebar .nav-group-title:
     padding: 6px 8px;
   }
 }
+
+/* SweetAlert surfaces follow the active page theme in every view. */
+.wiki-swal-popup.swal2-popup {
+  border: 1px solid #383a3e !important;
+  background: #1c1d1f !important;
+  color: #f0efeb !important;
+  box-shadow: 0 24px 72px rgb(0 0 0 / .42) !important;
+  font-family: 'DM Sans', sans-serif !important;
+}
+.wiki-swal-popup .wiki-swal-title,
+.wiki-swal-popup .swal2-title {
+  color: #f0efeb !important;
+}
+.wiki-swal-popup .wiki-swal-body,
+.wiki-swal-popup .swal2-html-container {
+  color: #c8c6c0 !important;
+}
+.wiki-swal-popup .swal2-input,
+.wiki-swal-popup .swal2-textarea,
+.wiki-swal-popup .swal2-select,
+.wiki-swal-popup select,
+.wiki-swal-popup textarea,
+.wiki-swal-popup input:not([type='checkbox']):not([type='radio']):not([type='file']):not([type='range']) {
+  border-color: #45464a !important;
+  background: #141516 !important;
+  color: #f0efeb !important;
+}
+.wiki-swal-popup .swal2-input::placeholder,
+.wiki-swal-popup .swal2-textarea::placeholder {
+  color: #94938e !important;
+}
+.wiki-swal-popup .swal2-validation-message {
+  background: #382629 !important;
+  color: #ffc4c7 !important;
+}
+.wiki-swal-popup .swal2-styled.swal2-confirm {
+  background: #a9573f !important;
+  color: #fffaf6 !important;
+}
+.wiki-swal-popup .swal2-styled.swal2-cancel {
+  background: #343537 !important;
+  color: #f0efeb !important;
+}
+.wiki-swal-popup .swal2-close {
+  color: #c8c6c0 !important;
+}
+body.light .wiki-swal-popup.swal2-popup {
+  border-color: #dedbd4 !important;
+  background: #fffefa !important;
+  color: #292a27 !important;
+  box-shadow: 0 20px 60px rgb(55 45 32 / .2) !important;
+}
+body.light .wiki-swal-popup .wiki-swal-title,
+body.light .wiki-swal-popup .swal2-title {
+  color: #292a27 !important;
+}
+body.light .wiki-swal-popup .wiki-swal-body,
+body.light .wiki-swal-popup .swal2-html-container {
+  color: #575851 !important;
+}
+body.light .wiki-swal-popup .swal2-input,
+body.light .wiki-swal-popup .swal2-textarea,
+body.light .wiki-swal-popup .swal2-select,
+body.light .wiki-swal-popup select,
+body.light .wiki-swal-popup textarea,
+body.light .wiki-swal-popup input:not([type='checkbox']):not([type='radio']):not([type='file']):not([type='range']) {
+  border-color: #d5d1c8 !important;
+  background: #fff !important;
+  color: #292a27 !important;
+}
+body.light .wiki-swal-popup .swal2-input::placeholder,
+body.light .wiki-swal-popup .swal2-textarea::placeholder {
+  color: #797970 !important;
+}
+body.light .wiki-swal-popup .swal2-validation-message {
+  background: #fff0ed !important;
+  color: #8c312e !important;
+}
+body.light .wiki-swal-popup .swal2-styled.swal2-cancel {
+  background: #e9e6df !important;
+  color: #30312e !important;
+}
+body.light .wiki-swal-popup .swal2-close {
+  color: #64655e !important;
+}
+body.light .wiki-toast.wiki-toast-success.swal2-popup.swal2-toast {
+  border-color: #afd7be !important;
+  background: #f0f8f2 !important;
+  color: #263b2d !important;
+}
+body.light .wiki-toast.wiki-toast-error.swal2-popup.swal2-toast {
+  border-color: #edc3c0 !important;
+  background: #fff2f0 !important;
+  color: #492c2a !important;
+}
+body.light .wiki-toast.wiki-toast-success.swal2-popup.swal2-toast .swal2-title {
+  color: #263b2d !important;
+}
+body.light .wiki-toast.wiki-toast-error.swal2-popup.swal2-toast .swal2-title {
+  color: #492c2a !important;
+}
+body.light .wiki-toast.wiki-toast-success.swal2-popup.swal2-toast .swal2-html-container {
+  color: #496352 !important;
+}
+body.light .wiki-toast.wiki-toast-error.swal2-popup.swal2-toast .swal2-html-container {
+  color: #754743 !important;
+}

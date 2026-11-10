@@ -9,6 +9,8 @@ const root = path.resolve(__dirname, '..');
 const includedRootFiles = new Set([
   '.env.example',
   '.gitignore',
+  'themes/README.md',
+  'themes/teralth-default-theme-source.zip',
   'PTERODACTYL-INSTALL.txt',
   'launcher.js',
   'package-lock.json',
@@ -71,6 +73,7 @@ async function collectInstallationFiles(projectRoot = root) {
     }
   }
   for (const directory of includedDirectories) await addTree(directory);
+  await addTree('themes/default');
   return files.sort((left, right) => left.localeCompare(right));
 }
 
@@ -86,8 +89,7 @@ async function createReleasePackage({
   const files = installationFiles.filter(
     file =>
       safeFilePath(file) &&
-      !file.endsWith('.test.js') &&
-      !file.startsWith('scripts/default-theme/'),
+      !file.endsWith('.test.js'),
   );
   if (!files.length) throw new Error('No update-compatible application files were found.');
   return createUpdatePackage({
