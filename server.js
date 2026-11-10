@@ -5208,11 +5208,11 @@ const sendAppIndex = sendPublicHtml('index.html', async (html, req) => {
 app.get(['/login', '/register', '/reset', '/verify'], sendAppIndex);
 const adminPanelPermissions = ['admin.view'];
 const sendUpdaterPage = sendStandaloneUpdaterHtml();
-app.get('/admin/updates', async (req, res, next) => {
-  if (!req.session.user) return res.redirect(303, '/login?next=%2Fadmin%2Fupdates');
+app.get('/admin/updates/progress', async (req, res, next) => {
+  if (!req.session.user) return res.redirect(303, '/login?next=%2Fadmin%2Fupdates%2Fprogress');
   try {
     const [current] = await query('SELECT must_change_password FROM users WHERE id=?', [req.session.user.id]);
-    if (!current) return res.redirect(303, '/login?next=%2Fadmin%2Fupdates');
+    if (!current) return res.redirect(303, '/login?next=%2Fadmin%2Fupdates%2Fprogress');
     if (current.must_change_password) return res.redirect(303, '/change-password');
     if (!(await canUser(req.session.user.id, 'updates.install'))) return res.sendStatus(404);
     return sendUpdaterPage(req, res, next);

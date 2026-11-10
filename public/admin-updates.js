@@ -1,7 +1,11 @@
 'use strict';
 
 window.TeralthAdminUpdates = {
-  async render(root, { api, t, esc, showError, csrf, navigate, canManageBackups }) {
+  async openProgressPage({ automatic, file, t }) {
+    const transferId = await storeUpdateTransfer({ automatic, file, t });
+    location.assign(`/admin/updates/progress?transfer=${encodeURIComponent(transferId)}`);
+  },
+  async render(root, { api, t, esc, showError, csrf, navigate, canManageBackups, startSeparateUpdate, autoStart }) {
     try {
       const result = await api('/api/admin/updates');
       const label = (spanish, english) => esc(t(spanish, english));
@@ -208,6 +212,7 @@ window.TeralthAdminUpdates = {
           showError,
           canManageBackups,
           navigate,
+          startSeparateUpdate,
         }),
       );
       root.querySelector('#siteUpdateForm')?.addEventListener('submit', async (event) => {
@@ -225,11 +230,26 @@ window.TeralthAdminUpdates = {
           showError,
           canManageBackups,
           navigate,
+          startSeparateUpdate,
         });
       });
 
       renderReleaseOverview();
       refreshReleaseOverview();
+      if (autoStart) {
+        await runUpdate({
+          ...autoStart,
+          confirmed: true,
+          button: root.querySelector(autoStart.automatic ? '#applyAutomaticUpdate' : '#applySiteUpdate'),
+          root,
+          api,
+          csrf,
+          t,
+          showError,
+          canManageBackups,
+          navigate,
+        });
+      }
     } catch (error) {
       showError(root, error);
     }
@@ -252,26 +272,128 @@ const stagePhases = {
   complete: 'finalization',
 };
 
-async function runUpdate({ automatic, file, button, root, api, csrf, t, showError, canManageBackups, navigate }) {
-  const confirmation = await window.Swal.fire({
-    icon: 'warning',
-    title: t('¿Estás seguro que deseas actualizar?', 'Are you sure you want to update?'),
-    text: t(
-      'Antes de realizar una actualización, recuerda tener una copia de seguridad de tu sistema.',
-      'Remember to create a backup of your system before updating.',
-    ),
-    showCancelButton: true,
-    showDenyButton: Boolean(canManageBackups),
-    confirmButtonText: t('Actualizar', 'Update'),
-    denyButtonText: t('Crear backup', 'Create backup'),
-    cancelButtonText: t('Cancelar', 'Cancel'),
-    reverseButtons: true,
+function openUpdateTransferDatabase(t) {
+  if (!window.indexedDB)
+    throw new Error(t('Este navegador no permite preparar la actualización.', 'This browser cannot prepare the update.'));
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.open('txwiki-update-transfer', 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains('transfers'))
+        request.result.createObjectStore('transfers', { keyPath: 'id' });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () =>
+      reject(request.error || new Error(t('No se pudo preparar la actualización.', 'Could not prepare the update.')));
   });
-  if (confirmation.isDenied) {
-    await navigate?.('backups');
+}
+
+async function storeUpdateTransfer({ automatic, file, t }) {
+  const packageFile = file
+    ? {
+        name: file.name,
+        type: file.type,
+        lastModified: file.lastModified,
+        bytes: await file.arrayBuffer(),
+      }
+    : null;
+  const database = await openUpdateTransferDatabase(t);
+  const transferId = Array.from(window.crypto.getRandomValues(new Uint8Array(16)), (value) =>
+    value.toString(16).padStart(2, '0'),
+  ).join('');
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction('transfers', 'readwrite');
+    transaction.objectStore('transfers').put({ id: transferId, automatic, file: packageFile });
+    transaction.oncomplete = () => {
+      database.close();
+      resolve(transferId);
+    };
+    transaction.onerror = () => {
+      database.close();
+      reject(transaction.error || new Error(t('No se pudo preparar la actualización.', 'Could not prepare the update.')));
+    };
+    transaction.onabort = () => {
+      database.close();
+      reject(transaction.error || new Error(t('No se pudo preparar la actualización.', 'Could not prepare the update.')));
+    };
+  });
+}
+
+async function consumeUpdateTransfer(transferId, t) {
+  const database = await openUpdateTransferDatabase(t);
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction('transfers', 'readwrite');
+    const store = transaction.objectStore('transfers');
+    let transfer = null;
+    const request = store.get(transferId);
+    request.onsuccess = () => {
+      transfer = request.result || null;
+      if (transfer) store.delete(transferId);
+    };
+    transaction.oncomplete = () => {
+      database.close();
+      resolve(transfer);
+    };
+    transaction.onerror = () => {
+      database.close();
+      reject(transaction.error || new Error(t('No se pudo abrir la actualización.', 'Could not open the update.')));
+    };
+    transaction.onabort = () => {
+      database.close();
+      reject(transaction.error || new Error(t('No se pudo abrir la actualización.', 'Could not open the update.')));
+    };
+  });
+}
+
+async function runUpdate({
+  automatic,
+  file,
+  button,
+  root,
+  api,
+  csrf,
+  t,
+  showError,
+  canManageBackups,
+  navigate,
+  startSeparateUpdate,
+  confirmed = false,
+}) {
+  if (!confirmed) {
+    const confirmation = await window.Swal.fire({
+      icon: 'warning',
+      title: t('¿Estás seguro que deseas actualizar?', 'Are you sure you want to update?'),
+      text: t(
+        'Antes de realizar una actualización, recuerda tener una copia de seguridad de tu sistema.',
+        'Remember to create a backup of your system before updating.',
+      ),
+      showCancelButton: true,
+      showDenyButton: Boolean(canManageBackups),
+      confirmButtonText: t('Actualizar', 'Update'),
+      denyButtonText: t('Crear backup', 'Create backup'),
+      cancelButtonText: t('Cancelar', 'Cancel'),
+      reverseButtons: true,
+    });
+    if (confirmation.isDenied) {
+      await navigate?.('backups');
+      return;
+    }
+    if (!confirmation.isConfirmed) return;
+  }
+
+  if (startSeparateUpdate) {
+    try {
+      await startSeparateUpdate({ automatic, file });
+    } catch (error) {
+      const errorBox = root.querySelector('.update-validation-error');
+      if (errorBox) {
+        errorBox.textContent = error.message || String(error);
+        errorBox.hidden = false;
+      } else {
+        showError(root, error);
+      }
+    }
     return;
   }
-  if (!confirmation.isConfirmed) return;
 
   const progress = root.querySelector('#updateValidation');
   const stage = root.querySelector('#updateValidationStage');
@@ -282,13 +404,21 @@ async function runUpdate({ automatic, file, button, root, api, csrf, t, showErro
   const phaseLabel = root.querySelector('#updateCurrentPhase');
   const phasePercent = root.querySelector('#updateCurrentPhasePercent');
   const errorBox = root.querySelector('.update-validation-error');
+  const standaloneUpdater = Boolean(document.querySelector('.standalone-updater-shell')?.isConnected);
   const stageLabels = {
     receiving: t('Preparando el paquete de actualización…', 'Preparing the update package…'),
     preparing: t('Preparando el entorno…', 'Preparing the environment…'),
     verifying: t('Verificando firma, clave y archivos…', 'Verifying the signature, key, and files…'),
     preflight: t('Comprobando el entorno de instalación…', 'Checking the installation environment…'),
     verified: t('Verificación completa. Iniciando instalación…', 'Verification complete. Starting installation…'),
-    failed: t('La validación falló. El sitio sigue disponible.', 'Validation failed. The site remains available.'),
+    backup: t('Creando una copia de seguridad…', 'Creating a backup…'),
+    'backup-complete': t('Copia de seguridad lista. Preparando archivos…', 'Backup ready. Preparing files…'),
+    staging: t('Preparando los archivos de actualización…', 'Preparing update files…'),
+    'installing-files': t('Instalando los archivos verificados…', 'Installing verified files…'),
+    migrations: t('Aplicando cambios de base de datos…', 'Applying database changes…'),
+    finalizing: t('Finalizando la actualización…', 'Finalizing the update…'),
+    complete: t('Actualización completa. Reiniciando el sitio…', 'Update complete. Restarting the site…'),
+    failed: t('La actualización no pudo completarse. El sitio se abrirá pronto.', 'The update could not be completed. The site will reopen shortly.'),
   };
   const phaseLabels = {
     preparation: t('Preparación', 'Preparation'),
@@ -334,8 +464,10 @@ async function runUpdate({ automatic, file, button, root, api, csrf, t, showErro
 
   button.disabled = true;
   errorBox.hidden = true;
+  if (document.querySelector('.standalone-updater-shell') && document.body?.classList)
+    document.body.classList.add('is-updating');
   showProgress(0, automatic ? 'preparing' : 'receiving', 'preparation', 0);
-  let maintenanceEntered = false;
+  let installationStarted = false;
   let validationPolling = true;
   const pollValidation = async () => {
     while (validationPolling) {
@@ -372,9 +504,34 @@ async function runUpdate({ automatic, file, button, root, api, csrf, t, showErro
     showProgress(45, 'verified', 'verification', 100);
     if (!validated.token)
       throw new Error(t('El servidor no devolvió una autorización de instalación válida.', 'The server did not return a valid installation authorization.'));
-    await loadMaintenanceAssets();
-    window.TeralthMaintenance.enter();
-    maintenanceEntered = true;
+    installationStarted = true;
+    if (standaloneUpdater) {
+      const pollUpdateProgress = async () => {
+        let hasSeenActiveUpdate = false;
+        while (document.body.contains(root)) {
+          try {
+            const status = await api('/api/updates/progress');
+            if (status.active) {
+              hasSeenActiveUpdate = true;
+              showProgress(status.progress, status.stage, status.phase, status.phaseProgress);
+            } else if (hasSeenActiveUpdate) {
+              window.location.assign('/admin/updates?space=main');
+              return;
+            }
+          } catch {
+            stage.textContent = t(
+              'Esperando que el servidor complete el reinicio…',
+              'Waiting for the server to finish restarting…',
+            );
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 600));
+        }
+      };
+      pollUpdateProgress();
+    } else {
+      await loadMaintenanceAssets();
+      window.TeralthMaintenance.enter();
+    }
     await api('/api/admin/updates/install', {
       method: 'POST',
       body: JSON.stringify({ token: validated.token }),
@@ -382,9 +539,22 @@ async function runUpdate({ automatic, file, button, root, api, csrf, t, showErro
   } catch (error) {
     validationPolling = false;
     await validationPoll;
-    if (maintenanceEntered) {
-      window.TeralthMaintenance.setProgress(0, 'failed');
-      window.setTimeout(() => window.location.reload(), 11000);
+    if (installationStarted) {
+      if (standaloneUpdater) {
+        showProgress(
+          Number(overallBar.getAttribute('aria-valuenow') || 0),
+          'failed',
+          updatePhases.find((phaseName) => root.querySelector(`[data-update-phase="${phaseName}"].is-active`)) ||
+            'preparation',
+          0,
+        );
+        errorBox.textContent = error.message;
+        errorBox.hidden = false;
+        button.disabled = false;
+      } else {
+        window.TeralthMaintenance.setProgress(0, 'failed');
+        window.setTimeout(() => window.location.reload(), 11000);
+      }
     } else {
       showProgress(
         Number(overallBar.getAttribute('aria-valuenow') || 0),
@@ -507,7 +677,7 @@ if (typeof document !== 'undefined' && typeof document.getElementById === 'funct
   (async () => {
     const session = await api('/api/auth/me');
     if (!session.user) {
-      location.assign('/login?next=%2Fadmin%2Fupdates');
+      location.assign('/login?next=%2Fadmin%2Fupdates%2Fprogress');
       return;
     }
     csrf = session.csrfToken;
@@ -517,6 +687,18 @@ if (typeof document !== 'undefined' && typeof document.getElementById === 'funct
     if (!hasPermission) throw new Error(t('No tienes permiso para instalar actualizaciones.', 'You do not have permission to install updates.'));
     const canManageBackups = user.isPrimaryAdmin || user.role === 'administrator' ||
       ['backups.import', 'backups.export', 'backups.schedule'].some((permission) => user.permissions?.includes(permission));
+    const transferId = new URLSearchParams(location.search).get('transfer');
+    const transfer = transferId ? await consumeUpdateTransfer(transferId, t) : null;
+    if (transferId && !transfer)
+      throw new Error(t('La solicitud de actualización venció. Vuelve al panel e inténtalo otra vez.', 'The update request expired. Return to the admin panel and try again.'));
+    if (transfer && !transfer.automatic) {
+      if (!transfer.file?.bytes)
+        throw new Error(t('No se pudo recuperar el archivo del paquete. Vuelve al panel e inténtalo otra vez.', 'The update package could not be recovered. Return to the admin panel and try again.'));
+      transfer.file = new File([transfer.file.bytes], transfer.file.name, {
+        type: transfer.file.type,
+        lastModified: transfer.file.lastModified,
+      });
+    }
     await window.TeralthAdminUpdates.render(root, {
       api,
       t,
@@ -525,6 +707,7 @@ if (typeof document !== 'undefined' && typeof document.getElementById === 'funct
       csrf,
       canManageBackups,
       navigate: (tab) => location.assign(`/admin/${tab}?space=main`),
+      autoStart: transfer ? { automatic: transfer.automatic, file: transfer.file } : null,
     });
   })().catch((error) => showError(root, error));
 }

@@ -124,7 +124,7 @@ function sendStandaloneUpdaterHtml() {
       '<div class="standalone-updater-title"><h1 data-es="Actualizador" data-en="System updater">System updater</h1>' +
       '<p data-es="Actualiza el sistema desde una página independiente." data-en="Update the system from this separate page.">Update the system from this separate page.</p></div>' +
       '<div class="standalone-updater-actions"><button class="standalone-updater-language" id="updateLanguageToggle" type="button">ES</button>' +
-      '<a class="standalone-updater-back" href="/admin"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> <span data-es="Volver a administración" data-en="Back to administration">Back to administration</span></a></div>' +
+      '<a class="standalone-updater-back" href="/admin/updates?space=main"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> <span data-es="Volver a administración" data-en="Back to administration">Back to administration</span></a></div>' +
       '</header><div class="standalone-updater-error" id="updatePageError" role="alert" hidden></div>' +
       '<div class="standalone-updater-content" id="updateApp"></div></main>';
     html = html.replace(/<title>[^<]*<\/title>/i, '<title>System updater</title>');

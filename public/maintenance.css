@@ -298,6 +298,18 @@ body {
   width: 220px;
   height: 220px;
 }
+.standalone-updater-page.is-updating .standalone-updater-content > .update-overview,
+.standalone-updater-page.is-updating .standalone-updater-content > .update-automatic-section,
+.standalone-updater-page.is-updating .standalone-updater-content > .update-history-section,
+.standalone-updater-page.is-updating .update-install-section > h2,
+.standalone-updater-page.is-updating .update-install-section > p,
+.standalone-updater-page.is-updating .update-install-section > form {
+  display: none;
+}
+.standalone-updater-page.is-updating .standalone-updater-content .update-validation {
+  margin-top: 0;
+  padding: 24px;
+}
 .standalone-updater-error {
   margin: 0 0 14px;
   padding: 12px 14px;

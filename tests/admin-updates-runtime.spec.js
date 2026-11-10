@@ -11,7 +11,8 @@ let origin;
 test.beforeAll(async () => {
   const app = express();
   app.get('/', (req, res) => res.send('<!doctype html><html><head><link rel="stylesheet" href="/styles.css"></head><body><main id="updates"></main></body></html>'));
-  app.get('/admin/updates', sendStandaloneUpdaterHtml());
+  app.get('/admin/updates', (req, res) => res.send('<!doctype html><html><head><link rel="stylesheet" href="/styles.css"></head><body><nav id="adminNavigation">Administration menu</nav><main id="updates"></main></body></html>'));
+  app.get('/admin/updates/progress', sendStandaloneUpdaterHtml());
   app.use(express.static(path.join(process.cwd(), 'public')));
   app.use(publicScripts);
   await new Promise((resolve) => {
@@ -111,7 +112,19 @@ test('updates page keeps manual installation available when no newer release exi
   await expect(page.locator('#applySiteUpdate')).toBeEnabled();
 });
 
-test('the updater opens as a separate page without wiki administration navigation', async ({ page }) => {
+async function prepareAdminUpdatePage(page, progressStatus = {
+  active: false,
+  progress: 0,
+  stage: 'idle',
+  phase: 'preparation',
+  phaseProgress: 0,
+}) {
+  await page.addInitScript(() => {
+    window.TeralthMaintenance = {
+      enter() { document.body.dataset.maintenanceEntered = 'true'; },
+      setProgress() {},
+    };
+  });
   await page.route('**/api/auth/me', route => route.fulfill({
     json: {
       user: { username: 'Admin', role: 'administrator', permissions: ['updates.install'] },
@@ -127,15 +140,86 @@ test('the updater opens as a separate page without wiki administration navigatio
   await page.route('**/api/admin/updates/validation-progress', route => route.fulfill({
     json: { active: false, progress: 0, stage: 'idle', phase: 'preparation', phaseProgress: 0 },
   }));
-  await page.route('**/api/updates/progress', route => route.fulfill({
-    json: { active: false, progress: 0, stage: 'idle', phase: 'preparation', phaseProgress: 0 },
-  }));
-
+  await page.route('**/api/updates/progress', route => route.fulfill({ json: progressStatus }));
   await page.goto(`${origin}/admin/updates`);
-  await expect(page.locator('.standalone-updater-shell')).toBeVisible();
+  await page.addScriptTag({ url: `${origin}/admin-updates.js` });
+  await page.evaluate(() => {
+    const t = (_spanish, english) => english;
+    window.Swal = { fire: async () => ({ isConfirmed: true }) };
+    const api = async (url, options = {}) => {
+      const response = await fetch(url, options);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Update request failed');
+      return result;
+    };
+    window.TeralthAdminUpdates.render(document.getElementById('updates'), {
+      api,
+      t,
+      esc: value => String(value),
+      showError: (_root, error) => { throw error; },
+      csrf: 'test-token',
+      canManageBackups: true,
+      startSeparateUpdate: update => window.TeralthAdminUpdates.openProgressPage({ ...update, t }),
+    });
+  });
+}
+
+test('the admin keeps its sidebar until an update is confirmed, then opens the separate progress page', async ({ page }) => {
+  let installs = 0;
+  await page.route('**/api/admin/updates/automatic/validate', route => route.fulfill({ json: { token: 'validated-token' } }));
+  await page.route('**/api/admin/updates/install', route => {
+    installs++;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await prepareAdminUpdatePage(page, {
+    active: true,
+    progress: 72,
+    stage: 'migrations',
+    phase: 'installation',
+    phaseProgress: 55,
+  });
+
+  await expect(page.locator('#adminNavigation')).toBeVisible();
   await expect(page.locator('#updateReleaseStatus')).toContainText('2 versions behind');
+  await expect(page.locator('.standalone-updater-shell')).toHaveCount(0);
+  await page.locator('#applyAutomaticUpdate').click();
+  await expect(page).toHaveURL(/\/admin\/updates\/progress\?transfer=/);
+  await expect(page.locator('.standalone-updater-shell')).toBeVisible();
   await expect(page.locator('#adminNavigation')).toHaveCount(0);
+  await expect(page.locator('body')).toHaveClass(/is-updating/);
   await expect(page.locator('.update-phase-list > li')).toHaveCount(4);
+  await expect(page.locator('#updateValidationBar')).toBeVisible();
+  await expect(page.locator('#updateValidationPercent')).toHaveText('72%');
+  await expect(page.locator('#updateValidationStage')).toHaveText('Applying database changes…');
+  await expect(page.locator('[data-update-phase="installation"] [role="progressbar"]')).toHaveAttribute('aria-valuenow', '55');
+  await expect.poll(() => installs).toBe(1);
+});
+
+test('a manually selected package is carried to the separate update page', async ({ page }) => {
+  let uploadedPackage = '';
+  let installs = 0;
+  await page.route('**/api/admin/updates/validate', route => {
+    uploadedPackage = route.request().postData() || '';
+    return route.fulfill({ json: { token: 'validated-token' } });
+  });
+  await page.route('**/api/admin/updates/install', route => {
+    installs++;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await prepareAdminUpdatePage(page);
+
+  await expect(page.locator('#updateReleaseStatus')).toContainText('2 versions behind');
+  await expect(page.locator('#applySiteUpdate')).toBeEnabled();
+  await page.locator('#siteUpdateFile').setInputFiles({
+    name: 'signed-update.zip',
+    mimeType: 'application/zip',
+    buffer: Buffer.from('signed update package'),
+  });
+  await page.locator('#applySiteUpdate').click();
+  await expect(page).toHaveURL(/\/admin\/updates\/progress\?transfer=/);
+  await expect(page.locator('#updateValidation')).toBeVisible();
+  await expect.poll(() => uploadedPackage).toContain('signed-update.zip');
+  await expect.poll(() => installs).toBe(1);
 });
 
 test('update progress places phase cards left of the overall ring and tracks each phase', async ({ page }) => {

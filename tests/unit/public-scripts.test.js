@@ -54,12 +54,12 @@ test('served obfuscated app bundle exposes the updates renderer', async () => {
 
   test('standalone updater uses its own page shell and the existing update assets', async () => {
     const app = express();
-    app.get('/admin/updates', sendStandaloneUpdaterHtml());
+    app.get('/admin/updates/progress', sendStandaloneUpdaterHtml());
     const server = await new Promise(resolve => {
       const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
     });
     try {
-      const response = await fetch(`http://127.0.0.1:${server.address().port}/admin/updates`);
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/admin/updates/progress`);
       const body = await response.text();
       assert.equal(response.status, 200);
       assert.match(body, /id="updateApp"/);
