@@ -90,6 +90,8 @@ async function createReleasePackage({
     file =>
       safeFilePath(file) &&
       !file.startsWith('scripts/default-theme/') &&
+      file !== 'themes/README.md' &&
+      file !== 'themes/teralth-default-theme-source.zip' &&
       !file.endsWith('.test.js'),
   );
   if (!files.length) throw new Error('No update-compatible application files were found.');

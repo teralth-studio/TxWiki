@@ -299,8 +299,12 @@ jobs:
           PY
 
   playwright:
-    name: Phase 4 - run all Playwright tests
+    name: Phase 4 - Playwright (${{ matrix.browser }})
     needs: security
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -322,16 +326,16 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps
+        run: npx playwright install --with-deps ${{ matrix.browser }}
 
       - name: Run Playwright tests
-        run: npx playwright test
+        run: npx playwright test --project=${{ matrix.browser }}
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.browser }}
           path: playwright-report/
           if-no-files-found: ignore
           retention-days: 30

@@ -280,6 +280,7 @@ test('one signed release package carries verified installer files and update fil
     await fs.promises.writeFile(signingKeyPath, privateKey.export({ type: 'pkcs8', format: 'pem' }));
     await fs.promises.mkdir(path.join(projectRoot, 'public'), { recursive: true });
     await fs.promises.mkdir(path.join(projectRoot, 'scripts'), { recursive: true });
+    await fs.promises.mkdir(path.join(projectRoot, 'themes'), { recursive: true });
     await fs.promises.mkdir(path.join(projectRoot, '.github', 'modernize'), { recursive: true });
     await fs.promises.mkdir(path.join(projectRoot, 'update_zips'), { recursive: true });
     await fs.promises.mkdir(path.join(projectRoot, 'data'), { recursive: true });
@@ -301,6 +302,8 @@ test('one signed release package carries verified installer files and update fil
     await fs.promises.mkdir(path.join(projectRoot, 'scripts', 'default-theme'), { recursive: true });
     await fs.promises.writeFile(path.join(projectRoot, 'scripts', 'default-theme', 'settings.json'), '{}');
     await fs.promises.writeFile(path.join(projectRoot, 'scripts', 'default-theme', 'theme.css'), 'body {}');
+    await fs.promises.writeFile(path.join(projectRoot, 'themes', 'README.md'), 'editable theme source');
+    await fs.promises.writeFile(path.join(projectRoot, 'themes', 'teralth-default-theme-source.zip'), 'theme archive');
     await fs.promises.writeFile(path.join(projectRoot, '.github', 'modernize', 'board.md'), 'local workflow state');
     await fs.promises.writeFile(path.join(projectRoot, 'update_zips', 'update-private.pem'), 'do not include');
     await fs.promises.writeFile(path.join(projectRoot, 'data', 'user-upload.png'), 'user data');
@@ -333,6 +336,10 @@ test('one signed release package carries verified installer files and update fil
     assert.ok(pkg.installation.some(file => file.path === 'scripts/default-theme/settings.json'));
     assert.ok(pkg.installation.some(file => file.path === 'scripts/default-theme/theme.css'));
     assert.ok(!pkg.files.some(file => file.path.startsWith('scripts/default-theme/')));
+    assert.ok(pkg.installation.some(file => file.path === 'themes/README.md'));
+    assert.ok(pkg.installation.some(file => file.path === 'themes/teralth-default-theme-source.zip'));
+    assert.ok(!pkg.files.some(file => file.path === 'themes/README.md'));
+    assert.ok(!pkg.files.some(file => file.path === 'themes/teralth-default-theme-source.zip'));
     assert.ok(!pkg.installation.some(file => file.path === '.env'));
     assert.ok(!pkg.installation.some(file => file.path.includes('update-private.pem')));
     assert.equal(
