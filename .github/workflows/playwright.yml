@@ -6,11 +6,21 @@ on:
     branches: [ main ]
 jobs:
   test:
-    name: Playwright (${{ matrix.browser }})
+    name: Playwright (${{ matrix.browser }}${{ matrix.shard && format(' shard {0}', matrix.shard) || '' }})
     strategy:
       fail-fast: false
       matrix:
-        browser: [chromium, firefox, webkit]
+        include:
+          - browser: chromium
+            shard: ''
+          - browser: firefox
+            shard: ''
+          - browser: webkit
+            shard: '1/2'
+            specs: tests/admin-updates-runtime.spec.js tests/administration-layout.spec.js
+          - browser: webkit
+            shard: '2/2'
+            specs: tests/documentation-header.spec.js tests/example.spec.js tests/maintenance-runtime.spec.js
     timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
@@ -23,10 +33,10 @@ jobs:
     - name: Install Playwright Browsers
       run: npx playwright install --with-deps ${{ matrix.browser }}
     - name: Run Playwright tests
-      run: npx playwright test --project=${{ matrix.browser }}
+      run: npx playwright test --project=${{ matrix.browser }} ${{ matrix.specs || '' }}
     - uses: actions/upload-artifact@v4
       if: ${{ !cancelled() }}
       with:
-        name: playwright-report-${{ matrix.browser }}
+        name: playwright-report-${{ matrix.browser }}-${{ strategy.job-index }}
         path: playwright-report/
         retention-days: 30

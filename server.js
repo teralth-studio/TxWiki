@@ -1309,6 +1309,16 @@ const backupExportLimiter = rateLimit({
   legacyHeaders: false,
   store: new MySqlRateLimitStore('backup-export'),
 });
+const backupCreateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => `user:${req.session.user.id}`,
+  store: new MySqlRateLimitStore('backup-create'),
+  handler: (req, res) =>
+    res.status(429).json({ error: 'Se alcanzó el límite de creación de backups. Inténtalo más tarde.' }),
+});
 const mail = async (to, subject, html) => {
   if (!mailer) throw new Error('SMTP no está configurado.');
   await mailer.sendMail({ from: smtpConfig.from, to, subject, html });
@@ -3098,6 +3108,9 @@ app.get(
   requireAnyPermission(['backups.import', 'backups.export', 'backups.schedule']),
   async (req, res, next) => {
     try {
+      const [pendingBackups] = await query(
+        "SELECT id FROM background_jobs WHERE job_type='backup' AND status IN ('queued','processing') LIMIT 1",
+      );
       res
         .set('Cache-Control', 'private, no-store')
         .json({
@@ -3107,12 +3120,33 @@ app.get(
           timeZones: backupTimeZones,
           nextRunAt: nextCronDate(backupCronExpression, new Date(), backupTimeZone).toISOString(),
           backups: await listBackups(),
+          creating: pendingBackups.length > 0,
           permissions: {
             import: await canUser(req.session.user.id, 'backups.import'),
             export: await canUser(req.session.user.id, 'backups.export'),
             schedule: await canUser(req.session.user.id, 'backups.schedule'),
           },
         });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+app.post(
+  '/api/admin/backups/create',
+  auth,
+  requirePermission('backups.export'),
+  backupCreateLimiter,
+  async (req, res, next) => {
+    try {
+      const [pending] = await query(
+        "SELECT id FROM background_jobs WHERE job_type='backup' AND status IN ('queued','processing') LIMIT 1",
+      );
+      if (pending.length)
+        return res.status(409).json({ error: 'Ya hay una copia de seguridad en proceso.' });
+      const queued = await enqueueJob('backup', null, 'manual-backup:' + crypto.randomUUID());
+      if (!queued) return res.status(409).json({ error: 'No se pudo programar la copia de seguridad.' });
+      res.status(202).json({ ok: true, queued: true });
     } catch (error) {
       next(error);
     }

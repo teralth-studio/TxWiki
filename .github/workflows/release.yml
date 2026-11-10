@@ -118,8 +118,6 @@ jobs:
 
           node --version
           npm --version
-          npm ci
-          npm ls --depth=0
 
           if [[ ! -f .env.example ]] || ! git ls-files --error-unmatch .env.example >/dev/null 2>&1; then
             echo "A tracked .env.example is required; keep real credentials in an untracked .env file." >&2
@@ -132,9 +130,33 @@ jobs:
             exit 1
           fi
 
-  code_validation:
-    name: Phase 2 - build and run code tests
+  package_preparation:
+    name: Phase 2 - prepare packages
     needs: environment
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install and verify packages
+        run: |
+          npm ci
+          npm ls --depth=0
+
+  code_validation:
+    name: Phase 3 - build and run code tests
+    needs: package_preparation
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -161,7 +183,7 @@ jobs:
           node --test tests/unit/*.test.js
 
   security:
-    name: Phase 3 - security validation
+    name: Phase 4 - security validation
     needs: code_validation
     runs-on: ubuntu-latest
     permissions:
@@ -299,12 +321,22 @@ jobs:
           PY
 
   playwright:
-    name: Phase 4 - Playwright (${{ matrix.browser }})
+    name: Phase 5 - Playwright (${{ matrix.browser }}${{ matrix.shard && format(' shard {0}', matrix.shard) || '' }})
     needs: security
     strategy:
       fail-fast: false
       matrix:
-        browser: [chromium, firefox, webkit]
+        include:
+          - browser: chromium
+            shard: ''
+          - browser: firefox
+            shard: ''
+          - browser: webkit
+            shard: '1/2'
+            specs: tests/admin-updates-runtime.spec.js tests/administration-layout.spec.js
+          - browser: webkit
+            shard: '2/2'
+            specs: tests/documentation-header.spec.js tests/example.spec.js tests/maintenance-runtime.spec.js
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -329,20 +361,20 @@ jobs:
         run: npx playwright install --with-deps ${{ matrix.browser }}
 
       - name: Run Playwright tests
-        run: npx playwright test --project=${{ matrix.browser }}
+        run: npx playwright test --project=${{ matrix.browser }} ${{ matrix.specs || '' }}
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-${{ matrix.browser }}
+          name: playwright-report-${{ matrix.browser }}-${{ strategy.job-index }}
           path: playwright-report/
           if-no-files-found: ignore
           retention-days: 30
 
   publish:
-    name: Phase 5 - publish official GitHub Release
-    needs: [environment, code_validation, security, playwright]
+    name: Phase 6 - publish official GitHub Release
+    needs: playwright
     runs-on: ubuntu-latest
     permissions:
       contents: write

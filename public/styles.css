@@ -10147,3 +10147,28 @@ body.light .wiki-toast.wiki-toast-success.swal2-popup.swal2-toast .swal2-html-co
 body.light .wiki-toast.wiki-toast-error.swal2-popup.swal2-toast .swal2-html-container {
   color: #754743 !important;
 }
+
+.backup-list-section .backup-heading-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.backup-list-section .backup-count {
+  min-width: 54px;
+  padding: 0 9px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (max-width: 680px) {
+  .backup-list-section > .section-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .backup-list-section .backup-heading-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}

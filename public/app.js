@@ -3313,6 +3313,7 @@ async function logsTab(root) {
     'captcha.updated': ['Se actualizó la configuración CAPTCHA', 'Updated CAPTCHA settings'],
     'proxy.updated': ['Se actualizó la configuración del proxy inverso', 'Updated reverse proxy settings'],
     'backup.imported': ['Se importó una copia de seguridad', 'Imported a backup'],
+    'backup.created': ['Creó una copia de seguridad', 'Created a backup'],
     'backup.schedule.updated': ['Se actualizó la programación de copias', 'Updated backup schedule'],
     'backup.updated': ['Se actualizaron los ajustes de copias de seguridad', 'Updated backup settings'],
     'theme.backup.created': ['Creó una copia de seguridad antes de instalar un tema', 'Created a backup before installing a theme'],
@@ -5298,11 +5299,17 @@ async function backupsTab(root) {
       'La más reciente aparece primero. Se muestran hasta cinco por página.',
       'Newest first. Up to five backups are shown per page.',
     ) +
-    '</p></div><span class="category-count">' +
+    '</p></div><div class="backup-heading-actions"><span class="category-count backup-count">' +
     (result.backups || []).length +
     ' / ' +
     esc(result.retention) +
-    '</span></div><div id="backupRows">' +
+    '</span>' +
+    (permissions.export
+      ? '<button class="primary-button" type="button" id="createBackup"><i class="fa-solid fa-plus"></i> ' +
+        t('CREAR BACKUP', 'CREATE BACKUP') +
+        '</button>'
+      : '') +
+    '</div></div><div id="backupRows">' +
     rows() +
     '</div><div class="backup-pagination" id="backupPagination"></div></section><section class="admin-section backup-import-section"><div><h2>' +
     t('Importar backup', 'Import backup') +
@@ -5350,6 +5357,58 @@ async function backupsTab(root) {
     };
   };
   renderPagination();
+  const createBackupButton = $('#createBackup', root),
+    backupNamesBeforeCreate = new Set((result.backups || []).map((item) => item.name)),
+    waitForBackup = async (showSuccess) => {
+      if (!createBackupButton) return null;
+      createBackupButton.disabled = true;
+      createBackupButton.setAttribute('aria-busy', 'true');
+      createBackupButton.innerHTML =
+        '<i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i> ' +
+        t('Creando backup…', 'Creating backup…');
+      try {
+        for (let attempt = 0; attempt < 900 && createBackupButton.isConnected; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          const latest = await api('/api/admin/backups'),
+            created = (latest.backups || []).find((item) => !backupNamesBeforeCreate.has(item.name));
+          if (created) {
+            await adminView('backups');
+            if (showSuccess)
+              await notify({
+                icon: 'success',
+                title: t('Backup creado', 'Backup created'),
+                text: formatDate(created.createdAt),
+              });
+            return created;
+          }
+          if (!latest.creating) {
+            if (showSuccess) throw new Error(t('No se pudo completar el backup.', 'The backup could not be completed.'));
+            await adminView('backups');
+            return null;
+          }
+        }
+        if (showSuccess) throw new Error(t('El backup sigue en proceso. Recarga la página para consultar su estado.', 'The backup is still running. Reload the page to check its status.'));
+      } catch (error) {
+        if (showSuccess) showError(root, error);
+      } finally {
+        if (createBackupButton.isConnected) {
+          createBackupButton.disabled = false;
+          createBackupButton.removeAttribute('aria-busy');
+          createBackupButton.innerHTML =
+            '<i class="fa-solid fa-plus" aria-hidden="true"></i> ' + t('CREAR BACKUP', 'CREATE BACKUP');
+        }
+      }
+      return null;
+    };
+  if (result.creating) void waitForBackup(false);
+  createBackupButton?.addEventListener('click', async () => {
+    try {
+      await api('/api/admin/backups/create', { method: 'POST', body: '{}' });
+      await waitForBackup(true);
+    } catch (error) {
+      showError(root, error);
+    }
+  });
   $('#backupRetention', root)?.addEventListener(
     'input',
     (event) => ($('#backupRetentionValue', root).textContent = event.target.value),

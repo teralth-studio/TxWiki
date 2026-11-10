@@ -58,6 +58,7 @@ function describeAdminAction(method, path, body = {}) {
   if (pathname === '/api/admin/smtp/test') return action('smtp.tested');
   if (pathname === '/api/admin/settings/registration') return action('registration.updated');
   if (pathname === '/api/admin/backups/import') return action('backup.imported');
+  if (pathname === '/api/admin/backups/create') return action('backup.created');
   if (pathname === '/api/admin/backups/schedule') return action('backup.schedule.updated');
   if (pathname === '/api/admin/themes/backup') return action('theme.backup.created');
   if (pathname === '/api/admin/themes/install') return action('theme.installed');
