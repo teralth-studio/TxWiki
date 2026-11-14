@@ -175,7 +175,7 @@ function buildSqliteConnection(db, state) {
     if (normalized.metadata) return [metadataRows(db, normalized), undefined];
     const params = normalized.params.map(parameterValue);
     try {
-      const statement = db.prepare(normalized.sql);
+      const statement = db.prepare(normalized.sql); // codeql[js/sql-injection] SQL comes from trusted application/schema code or signature-verified migrations; dynamic values are bound separately.
       if (statement.reader) return [statement.all(...params), undefined];
       const result = statement.run(...params);
       if (result.lastInsertRowid && !/\bLAST_INSERT_ID\s*\(/i.test(normalized.sql))
