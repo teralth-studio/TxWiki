@@ -397,6 +397,8 @@ for (const width of [1440, 390]) {
     await page.route('**/api/setup/test-db', route => route.fulfill({ json: { ok: true } }));
     await page.route('**/api/setup/test-smtp', route => route.fulfill({ json: { ok: true } }));
     await page.goto(`${origin}/installer.html`);
+    await page.locator('#setupCode').fill('playwright-test-setup-key');
+    await page.locator('#nextSetupKey').click();
     await page.locator('#testDatabase').click();
     await page.locator('#nextDatabase').click();
     await page.locator('#testSmtp').click();
