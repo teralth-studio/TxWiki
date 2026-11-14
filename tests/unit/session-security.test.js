@@ -2,7 +2,12 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const express = require('express');
 const session = require('express-session');
-const { SESSION_IDLE_MS, rejectLegacySessions } = require('../../scripts/session-security');
+const {
+  SESSION_ABSOLUTE_MS,
+  SESSION_IDLE_MS,
+  enforceAbsoluteSessionLifetime,
+  rejectLegacySessions,
+} = require('../../scripts/session-security');
 const { createSiteRateLimiter } = require('../../scripts/site-rate-limit');
 
 async function listen(app) {
@@ -28,6 +33,7 @@ test('sessions roll for 30 minutes, expire server-side, and discard legacy sessi
     cookie: { httpOnly: true, sameSite: 'strict', maxAge: SESSION_IDLE_MS }
   }));
   app.use(rejectLegacySessions);
+  app.use(enforceAbsoluteSessionLifetime);
   app.post('/login', (req, res) => {
     req.session.regenerate(error => {
       if (error) return res.sendStatus(500);
@@ -35,7 +41,7 @@ test('sessions roll for 30 minutes, expire server-side, and discard legacy sessi
       return res.json({ id: req.sessionID });
     });
   });
-  app.get('/private', (req, res) => res.sendStatus(req.session.user ? 204 : 401));
+  app.get('/private', (req, res) => res.sendStatus(req.session?.user ? 204 : 401));
   const server = await listen(app);
   const url = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -51,6 +57,8 @@ test('sessions roll for 30 minutes, expire server-side, and discard legacy sessi
     assert.ok(privateResponse.headers.get('set-cookie'));
     const stored = JSON.parse(store.sessions[id]);
     assert.equal(stored.cookie.originalMaxAge, SESSION_IDLE_MS);
+    assert.ok(stored.authenticatedAt);
+    assert.equal(Date.now() - stored.authenticatedAt < SESSION_ABSOLUTE_MS, true);
     stored.cookie.expires = new Date(Date.now() - 1).toISOString();
     store.sessions[id] = JSON.stringify(stored);
     assert.equal((await fetch(url + '/private', { headers: { cookie } })).status, 401);
@@ -63,6 +71,45 @@ test('sessions roll for 30 minutes, expire server-side, and discard legacy sessi
     store.sessions[legacyId] = JSON.stringify(legacy);
     assert.equal((await fetch(url + '/private', { headers: { cookie: legacyCookie } })).status, 401);
     assert.equal(store.sessions[legacyId], undefined);
+  } finally {
+    await close(server);
+  }
+});
+
+test('authenticated sessions expire after the absolute lifetime', async () => {
+  const app = express();
+  const store = new session.MemoryStore();
+  app.use(session({
+    name: 'teralth.sid',
+    secret: 'integration-test-secret-not-used-in-production',
+    store,
+    resave: false,
+    saveUninitialized: false,
+    rolling: true,
+    cookie: { httpOnly: true, sameSite: 'strict', maxAge: SESSION_IDLE_MS },
+  }));
+  app.use(rejectLegacySessions);
+  app.use(enforceAbsoluteSessionLifetime);
+  app.get('/login', (req, res) => {
+    req.session.user = { id: 1 };
+    req.session.authenticatedAt = Date.now();
+    req.session.save(() => res.sendStatus(204));
+  });
+  app.get('/private', (req, res) => res.sendStatus(req.session?.user ? 204 : 401));
+  const server = await listen(app);
+  const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const login = await fetch(url + '/login');
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const [id] = Object.keys(store.sessions);
+    const stored = JSON.parse(store.sessions[id]);
+    stored.authenticatedAt = Date.now() - SESSION_ABSOLUTE_MS - 1;
+    store.sessions[id] = JSON.stringify(stored);
+
+    const response = await fetch(url + '/private', { headers: { cookie } });
+    assert.equal(response.status, 401);
+    assert.equal(store.sessions[id], undefined);
+    assert.match(response.headers.get('set-cookie'), /teralth\.sid=;/i);
   } finally {
     await close(server);
   }

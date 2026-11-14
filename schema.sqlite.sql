@@ -61,6 +61,25 @@ CREATE TABLE IF NOT EXISTS pages (
 );
 CREATE INDEX IF NOT EXISTS idx_pages_space_navigation ON pages(space_slug,category_id,sort_order,slug);
 
+CREATE TABLE IF NOT EXISTS page_revisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  space_slug TEXT NOT NULL COLLATE BINARY,
+  page_slug TEXT NOT NULL,
+  category_id INTEGER,
+  icon TEXT NOT NULL,
+  page_type TEXT NOT NULL CHECK(page_type IN ('content','redirect')),
+  redirect_url TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  titles TEXT NOT NULL,
+  content TEXT NOT NULL,
+  updated_by INTEGER,
+  page_updated_at TEXT,
+  revision_by INTEGER,
+  revision_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (space_slug) REFERENCES spaces(slug) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_page_revisions_lookup ON page_revisions(space_slug,page_slug,id);
+
 CREATE TABLE IF NOT EXISTS settings (
   setting_key TEXT NOT NULL PRIMARY KEY,
   setting_value TEXT NOT NULL

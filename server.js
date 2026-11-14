@@ -25,7 +25,11 @@ const {
 } = require('./scripts/backup-crypto');
 const { requireCurrentAdminSession } = require('./scripts/admin-session');
 const { requirePrimaryAdmin, resolveSmtpPassword } = require('./scripts/smtp-security');
-const { SESSION_IDLE_MS, rejectLegacySessions } = require('./scripts/session-security');
+const {
+  SESSION_IDLE_MS,
+  enforceAbsoluteSessionLifetime,
+  rejectLegacySessions,
+} = require('./scripts/session-security');
 const { createSiteRateLimiter } = require('./scripts/site-rate-limit');
 const { senderEmailAddress, validEmailAddress } = require('./scripts/auth/email-address');
 const { loginDetails } = require('./scripts/login-details');
@@ -40,6 +44,7 @@ const { normalizeSiteOptions, normalizeSupportUrl } = require('./scripts/site-se
 const { HEADER_LINK_LIMIT, normalizeHeaderLink, normalizeHeaderLinks } = require('./scripts/header-links');
 const { migrateSitePermissions } = require('./scripts/role-permissions');
 const { createAdminAuditMiddleware } = require('./scripts/admin-audit-log');
+const { capturePageRevision } = require('./scripts/page-revisions');
 const { ARCHIVE_NAME: themeSourceArchiveName, ensureThemeSourceArchive } = require('./scripts/theme-source-package');
 const {
   DEFAULT_THEME,
@@ -270,6 +275,7 @@ const expectedTables = [
   'spaces',
   'categories',
   'pages',
+  'page_revisions',
   'settings',
   'reactions',
   'account_tokens',
@@ -537,6 +543,7 @@ app.use(
   }),
 );
 app.use(rejectLegacySessions);
+app.use(enforceAbsoluteSessionLifetime);
 app.use('/api/admin/uploads', uploadDiagnostics);
 app.use('/api/admin/spaces/:slug/logo', uploadDiagnostics);
 app.use('/api', (req, res, next) => {
@@ -1835,7 +1842,7 @@ async function pumpBackgroundJobs() {
         [lockToken],
       );
       if (!claim.affectedRows) return;
-      const [rows] = await query(
+      const rows = await query(
         "SELECT id,job_type,payload,attempts FROM background_jobs WHERE lock_token=? AND status='processing' LIMIT 1",
         [lockToken],
       );
@@ -2728,6 +2735,7 @@ app.post('/api/auth/login', loginLimiter, loginAccountLimiter, async (req, res, 
       }));
     }
     req.session.user = userView(u);
+    req.session.authenticatedAt = Date.now();
     req.session.csrfToken = token();
     req.session.save(async (e) => {
       if (e) return next(e);
@@ -2792,6 +2800,7 @@ app.post('/api/auth/password', auth, loginLimiter, async (req, res, next) => {
     await invalidateUserSessions(u.id);
     await new Promise((resolve, reject) => req.session.regenerate((e) => (e ? reject(e) : resolve())));
     req.session.user = { ...userView(u), mustChangePassword: false };
+    req.session.authenticatedAt = Date.now();
     if (previousTwoFactorBinding) req.session.twoFactorBinding = previousTwoFactorBinding;
     req.session.csrfToken = token();
     req.session.save((e) =>
@@ -4743,20 +4752,36 @@ app.put('/api/admin/pages/:slug', auth, requirePermission('pages.create_edit'), 
       pageType === 'content'
         ? Object.fromEntries(Object.entries(content).map(([language, value]) => [language, clean(value)]))
         : {};
-    await query(
-      'INSERT INTO pages (space_slug,category_id,slug,icon,page_type,redirect_url,titles,content,updated_by) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE category_id=VALUES(category_id),icon=VALUES(icon),page_type=VALUES(page_type),redirect_url=VALUES(redirect_url),titles=VALUES(titles),content=VALUES(content),updated_by=VALUES(updated_by),updated_at=UTC_TIMESTAMP()',
-      [
-        space,
-        categoryId,
-        slug,
-        String(req.body.icon || 'fa-file-lines').slice(0, 80),
-        pageType,
-        safeRedirect,
-        JSON.stringify(titles),
-        JSON.stringify(safeContent),
-        req.session.user.id,
-      ],
-    );
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [existingRows] = await connection.execute(
+        'SELECT id,space_slug,slug,category_id,icon,page_type,redirect_url,sort_order,titles,content,updated_by,updated_at FROM pages WHERE space_slug=? AND slug=? LIMIT 1 FOR UPDATE',
+        [space, slug],
+      );
+      if (existingRows[0])
+        await capturePageRevision(connection, existingRows[0], req.session.user.id);
+      await connection.execute(
+        'INSERT INTO pages (space_slug,category_id,slug,icon,page_type,redirect_url,titles,content,updated_by) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE category_id=VALUES(category_id),icon=VALUES(icon),page_type=VALUES(page_type),redirect_url=VALUES(redirect_url),titles=VALUES(titles),content=VALUES(content),updated_by=VALUES(updated_by),updated_at=UTC_TIMESTAMP()',
+        [
+          space,
+          categoryId,
+          slug,
+          String(req.body.icon || 'fa-file-lines').slice(0, 80),
+          pageType,
+          safeRedirect,
+          JSON.stringify(titles),
+          JSON.stringify(safeContent),
+          req.session.user.id,
+        ],
+      );
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
     const [saved] = await query(
       'SELECT slug,space_slug,titles,content,updated_at FROM pages WHERE space_slug=? AND slug=? LIMIT 1',
       [space, slug],
@@ -4791,6 +4816,87 @@ app.put('/api/admin/pages/:slug', auth, requirePermission('pages.create_edit'), 
     next(e);
   }
 });
+app.get(
+  '/api/admin/pages/:slug/revisions',
+  auth,
+  requirePermission('pages.create_edit'),
+  async (req, res, next) => {
+    try {
+      const revisions = await query(
+        'SELECT r.id,r.revision_at,r.page_updated_at,r.revision_by,u.username AS revision_by_name FROM page_revisions r LEFT JOIN users u ON u.id=r.revision_by WHERE r.space_slug=? AND r.page_slug=? ORDER BY r.id DESC LIMIT 100',
+        [activeSpace(req), slugify(req.params.slug)],
+      );
+      res.set('Cache-Control', 'private, no-store').json({ revisions });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+app.put(
+  '/api/admin/pages/:slug/revisions/:revisionId/restore',
+  auth,
+  requirePermission('pages.create_edit'),
+  async (req, res, next) => {
+    const space = activeSpace(req);
+    const slug = slugify(req.params.slug);
+    const revisionId = String(req.params.revisionId);
+    if (!slug || !/^[1-9]\d{0,19}$/.test(revisionId))
+      return res.status(400).json({ error: 'La revisión seleccionada no es válida.' });
+
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [revisionRows] = await connection.execute(
+        'SELECT * FROM page_revisions WHERE id=? AND space_slug=? AND page_slug=? LIMIT 1 FOR UPDATE',
+        [revisionId, space, slug],
+      );
+      const revision = revisionRows[0];
+      if (!revision) {
+        await connection.rollback();
+        return res.status(404).json({ error: 'No se encontró la revisión seleccionada.' });
+      }
+      const [currentRows] = await connection.execute(
+        'SELECT id,space_slug,slug,category_id,icon,page_type,redirect_url,sort_order,titles,content,updated_by,updated_at FROM pages WHERE space_slug=? AND slug=? LIMIT 1 FOR UPDATE',
+        [space, slug],
+      );
+      if (currentRows[0])
+        await capturePageRevision(connection, currentRows[0], req.session.user.id);
+
+      let categoryId = revision.category_id;
+      if (categoryId) {
+        const [categoryRows] = await connection.execute(
+          'SELECT id FROM categories WHERE id=? AND space_slug=? LIMIT 1',
+          [categoryId, space],
+        );
+        if (!categoryRows[0]) categoryId = null;
+      }
+      const titles = json(revision.titles);
+      const content = safePageContent(revision.content);
+      await connection.execute(
+        'INSERT INTO pages (space_slug,category_id,slug,icon,page_type,redirect_url,sort_order,titles,content,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE category_id=VALUES(category_id),icon=VALUES(icon),page_type=VALUES(page_type),redirect_url=VALUES(redirect_url),sort_order=VALUES(sort_order),titles=VALUES(titles),content=VALUES(content),updated_by=VALUES(updated_by),updated_at=UTC_TIMESTAMP()',
+        [
+          space,
+          categoryId,
+          slug,
+          revision.icon,
+          revision.page_type,
+          revision.redirect_url,
+          revision.sort_order,
+          JSON.stringify(titles),
+          JSON.stringify(content),
+          req.session.user.id,
+        ],
+      );
+      await connection.commit();
+      res.set('Cache-Control', 'private, no-store').json({ ok: true, slug, space });
+    } catch (error) {
+      await connection.rollback();
+      next(error);
+    } finally {
+      connection.release();
+    }
+  },
+);
 app.put('/api/admin/home-page', auth, requirePermission('pages.create_edit'), async (req, res, next) => {
   try {
     const space = activeSpace(req),

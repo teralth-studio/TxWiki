@@ -4319,6 +4319,80 @@ async function openEditor(root, page) {
   editorHeader.append(backButton, $('#editorHeading', editor));
   editor.prepend(editorHeader);
   $('#savePage', editor).parentElement.className = 'editor-page-actions';
+  if (page) {
+    const historyButton = document.createElement('button');
+    historyButton.type = 'button';
+    historyButton.className = 'secondary-button';
+    historyButton.textContent = t('Historial', 'History');
+    $('#savePage', editor).parentElement.insertBefore(historyButton, $('#savePage', editor));
+    historyButton.onclick = async () => {
+      try {
+        const historySpace = state.space;
+        if (state.dirty) {
+          const discard = await Swal.fire({
+            icon: 'warning',
+            title: t('Hay cambios sin guardar', 'Unsaved changes'),
+            text: t('Restaurar una revisión descartará los cambios actuales.', 'Restoring a revision will discard your current changes.'),
+            showCancelButton: true,
+            confirmButtonText: t('Continuar', 'Continue'),
+            cancelButtonText: t('Cancelar', 'Cancel'),
+          });
+          if (!discard.isConfirmed) return;
+        }
+        const revisions = await api(
+          `/api/admin/pages/${encodeURIComponent(currentSlug)}/revisions`,
+          { headers: { 'X-Wiki-Space': historySpace } },
+        );
+        if (state.space !== historySpace)
+          throw new Error(t('El espacio de trabajo cambió durante la consulta.', 'The workspace changed while loading history.'));
+        if (!revisions.revisions.length) {
+          await Swal.fire({
+            icon: 'info',
+            text: t('Esta página aún no tiene revisiones anteriores.', 'This page has no previous revisions yet.'),
+          });
+          return;
+        }
+        const choice = await Swal.fire({
+          title: t('Historial de revisiones', 'Revision history'),
+          input: 'select',
+          inputPlaceholder: t('Selecciona una revisión', 'Select a revision'),
+          inputOptions: Object.fromEntries(
+            revisions.revisions.map((revision) => [
+              revision.id,
+              `${new Date(revision.revision_at).toLocaleString()} — ${revision.revision_by_name || t('Usuario eliminado', 'Deleted user')}`,
+            ]),
+          ),
+          showCancelButton: true,
+          confirmButtonText: t('Restaurar', 'Restore'),
+          cancelButtonText: t('Cancelar', 'Cancel'),
+        });
+        if (!choice.isConfirmed || !choice.value) return;
+        const confirmation = await Swal.fire({
+          icon: 'warning',
+          title: t('¿Restaurar esta revisión?', 'Restore this revision?'),
+          text: t('El estado actual se conservará en el historial.', 'The current page will be preserved in the history.'),
+          showCancelButton: true,
+          confirmButtonText: t('Restaurar', 'Restore'),
+          cancelButtonText: t('Cancelar', 'Cancel'),
+        });
+        if (!confirmation.isConfirmed) return;
+        const saveSpace = historySpace;
+        await api(
+          `/api/admin/pages/${encodeURIComponent(currentSlug)}/revisions/${encodeURIComponent(choice.value)}/restore`,
+          { method: 'PUT', headers: { 'X-Wiki-Space': saveSpace } },
+        );
+        state.dirty = false;
+        const refreshed = await api(`/api/pages/${encodeURIComponent(currentSlug)}`, {
+          headers: { 'X-Wiki-Space': saveSpace },
+        });
+        if (state.space !== saveSpace)
+          throw new Error(t('El espacio de trabajo cambió durante la restauración.', 'The workspace changed while restoring.'));
+        await openEditor(root, { ...page, ...refreshed.page });
+      } catch (error) {
+        showError(editor, error);
+      }
+    };
+  }
   const updateEditorHeading = (title) => {
     $('#editorHeading', editor).textContent = page
       ? t('Editando el archivo:', 'Editing file:') + ' ' + (title || first || currentSlug)

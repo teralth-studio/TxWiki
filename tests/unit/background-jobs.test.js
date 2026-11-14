@@ -14,6 +14,7 @@ test('background worker processes a claimed mail job and records delivery failur
     const job = { id: 17, job_type: 'mail', payload: 'encrypted', attempts: 1 };
     const context = {
       crypto: { randomUUID: () => 'test-lock' },
+      activeDatabaseType: 'mysql',
       pool: {
         async execute(sql, params) {
           calls.push({ sql, params });

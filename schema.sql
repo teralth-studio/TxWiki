@@ -55,6 +55,24 @@ CREATE TABLE IF NOT EXISTS pages (
   FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL,
   FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS page_revisions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  space_slug VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  page_slug VARCHAR(150) NOT NULL,
+  category_id BIGINT UNSIGNED NULL,
+  icon VARCHAR(80) NOT NULL,
+  page_type ENUM('content','redirect') NOT NULL,
+  redirect_url VARCHAR(2048) NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  titles JSON NOT NULL,
+  content JSON NOT NULL,
+  updated_by BIGINT UNSIGNED NULL,
+  page_updated_at TIMESTAMP NULL,
+  revision_by BIGINT UNSIGNED NULL,
+  revision_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_page_revisions_lookup (space_slug,page_slug,id),
+  FOREIGN KEY (space_slug) REFERENCES spaces(slug) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS settings (
   setting_key VARCHAR(100) NOT NULL PRIMARY KEY,
   setting_value JSON NOT NULL
