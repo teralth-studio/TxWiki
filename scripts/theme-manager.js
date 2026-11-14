@@ -299,9 +299,14 @@ function safeArchiveName(name) {
   if (!parts.length || parts.some((part) => !/^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$/.test(part) || part === '.' || part === '..' || /[. ]$/.test(part))) return false;
   if (parts.some((part) => part.startsWith('.'))) return false;
   const file = parts.at(-1).toLowerCase();
-  if (directory) return parts[0] === 'assets';
+  if (directory)
+    return parts[0] === 'assets' ||
+      (parts[0] === 'source' && (parts.length === 1 || (parts.length === 2 && parts[1] === 'public')));
   return (parts.length === 1 && ['settings.json', 'theme.css', 'preview.png'].includes(file)) ||
-    (parts.length >= 2 && parts[0] === 'assets' && ASSET_EXTENSIONS.has(path.extname(file)));
+    (parts.length === 1 && file === 'readme.txt') ||
+    (parts.length >= 2 && parts[0] === 'assets' && ASSET_EXTENSIONS.has(path.extname(file))) ||
+    (parts.length === 3 && parts[0] === 'source' && parts[1] === 'public' &&
+      ['index.html', 'styles.css'].includes(parts[2].toLowerCase()));
 }
 
 function openZip(buffer) {
@@ -496,65 +501,21 @@ function bundledDefaultTheme() {
   };
 }
 
-async function ensureProjectDefaultTheme(themesRoot) {
-  let rootStat;
-  try { rootStat = await fs.promises.lstat(themesRoot); }
-  catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    await fs.promises.mkdir(themesRoot, { recursive: true, mode: 0o750 });
-    rootStat = await fs.promises.lstat(themesRoot);
-  }
-  if (rootStat.isSymbolicLink() || !rootStat.isDirectory())
-    fail('THEME_ROOT_INVALID', 'The themes directory is not safe.', 500);
-
-  let directory = await findDirectoryEntry(themesRoot, DEFAULT_THEME);
-  if (!directory) {
-    const target = path.join(themesRoot, DEFAULT_THEME);
-    try { await fs.promises.mkdir(target, { mode: 0o750 }); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
-    directory = await findDirectoryEntry(themesRoot, DEFAULT_THEME);
-  }
-  if (!directory) fail('THEME_DEFAULT_MISSING', 'The project Default theme folder is missing.', 500);
-
-  for (const [name, content] of DEFAULT_THEME_FILES) {
-    if (await findFileEntry(directory.path, name)) continue;
-    let handle;
-    try {
-      handle = await fs.promises.open(
-        path.join(directory.path, name),
-        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | (fs.constants.O_NOFOLLOW || 0),
-        0o640,
-      );
-      await handle.writeFile(content);
-      await handle.sync();
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-    } finally {
-      await handle?.close();
-    }
-  }
-  return directory;
-}
-
 async function resolveDefaultThemeSource(themesRoot) {
-  try {
-    const projectTheme = await ensureProjectDefaultTheme(themesRoot);
-    try { await ensureThemeSourceArchive(themesRoot); }
-    catch (error) { logDefaultFallback(error); }
-    const validated = await validateThemeFiles(projectTheme.path, DEFAULT_THEME);
-    return { directory: projectTheme.path, ...validated };
-  } catch (error) {
-    logDefaultFallback(error);
-  }
-
   try {
     const internalTheme = await ensureDefaultThemeFiles();
     const validated = await validateThemeFiles(internalTheme.path, DEFAULT_THEME);
+    try { await ensureThemeSourceArchive(themesRoot); }
+    catch (error) {
+      const code = error instanceof ThemeError ? error.code : 'THEME_SOURCE_ARCHIVE_FAILED';
+      console.error('[Teralth Wiki] Could not ensure the Default theme template ZIP.', code);
+    }
     return { directory: internalTheme.path, ...validated };
   } catch (error) {
     logDefaultFallback(error);
-    return bundledDefaultTheme();
   }
+
+  return bundledDefaultTheme();
 }
 
 function logDefaultFallback(error) {

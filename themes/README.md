@@ -1,52 +1,21 @@
-# Creating themes
+# Theme templates and installed themes
 
-TxWiki themes are installed from the administrator's **Themes** section. Upload a
-ZIP containing `settings.json` and `theme.css` at its root. The project keeps
-`default/` as its built-in project copy; uploaded themes are stored beside it at
-runtime.
+The active **Default** theme is bundled inside the application at
+`scripts/default-theme/`. It is never loaded from this folder, so removing or
+damaging `/themes` cannot disable the built-in theme.
 
-The editable full-page source is also kept in
-`teralth-default-theme-source.zip`. It contains the public HTML shell, the full
-stylesheet, and the Default theme settings and CSS. Administrators can download
-it from the Themes panel. The source ZIP is for editing the page template; the
-Themes installer accepts the CSS-only package format described below.
+`default.zip` is the editable, installable starter template. It contains
+`settings.json` and `theme.css` at the ZIP root, plus the public HTML and CSS
+reference files in `source/public/`. Edit the theme settings and stylesheet,
+give the theme a name other than `Default`, then upload the ZIP in the
+administrator's Themes section. The uploaded theme is extracted to its own
+directory under `/themes`.
 
-Example `settings.json`:
+The source HTML/CSS files are retained as authoring references. TxWiki continues
+to render its bundled application shell; uploaded HTML is never executed or
+served. The theme's active appearance comes from its validated, scoped
+`theme.css`. Do not add JavaScript, secrets, or remote assets.
 
-```json
-{
-  "name": "My Theme",
-  "version": "1.0.0",
-  "author": "Your name",
-  "support": "",
-  "settings": [
-    {
-      "name": "Primary Color",
-      "type": "color",
-      "default": "#b85b42"
-    }
-  ]
-}
-```
-
-Supported setting types are `color`, `number`, `text`, `large-text`, `switch`,
-`dropdown`, and `multiple-dropdown`. Dropdown settings must include an `options`
-array with at least two values.
-
-Put theme styles in `theme.css`. Selectors are scoped to the active theme, and
-the server validates CSS before using it. Do not include JavaScript, HTML, or
-external asset URLs. Optional images and fonts belong under `assets/`; CSS may
-reference them with paths such as `url("assets/logo.webp")`. Supported assets
-are PNG, JPEG, GIF, WebP, AVIF, WOFF, WOFF2, TTF, and OTF. An optional
-`preview.png` can be included at the ZIP root.
-
-The ZIP must contain files directly at its root, for example:
-
-```text
-my-theme.zip
-├── settings.json
-├── theme.css
-├── preview.png          # optional
-└── assets/              # optional
-    └── logo.webp
-```
+Installed theme ZIPs must contain `settings.json` and `theme.css` at the root.
+Optional files are `preview.png`, files under `assets/`, and the two public
+references under `source/public/`.

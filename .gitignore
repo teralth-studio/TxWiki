@@ -18,12 +18,8 @@ data/
 /images/
 /work/
 /themes/*
-!/themes/default/
 !/themes/README.md
-!/themes/teralth-default-theme-source.zip
-/themes/default/*
-!/themes/default/settings.json
-!/themes/default/theme.css
+!/themes/default.zip
 
 # Playwright
 /test-results/

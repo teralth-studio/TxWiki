@@ -89,9 +89,9 @@ function safeFilePath(value) {
     /^scripts\/[A-Za-z0-9._/-]+\.js$/.test(value) ||
     /^scripts\/default-theme\/(?:settings\.json|theme\.css)$/.test(value) ||
     value === 'themes/README.md' ||
-    value === 'themes/teralth-default-theme-source.zip' ||
+    value === 'themes/default.zip' ||
     /^emails\/[A-Za-z0-9._/-]+\.(?:js|html)$/.test(value) ||
-    /^themes\/[a-z0-9][a-z0-9_-]{0,47}\/(?:settings\.json|theme\.css|preview\.png|assets\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|avif|woff2?|ttf|otf))$/.test(value)
+    /^themes\/[a-z0-9][a-z0-9_-]{0,47}\/(?:settings\.json|theme\.css|preview\.png|assets\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|avif|woff2?|ttf|otf)|source\/public\/(?:index\.html|styles\.css))$/.test(value)
   );
 }
 

@@ -7,23 +7,25 @@ const { pipeline } = require('node:stream/promises');
 const yazl = require('yazl');
 const { readRegularFileNoFollow } = require('./safe-file');
 
-const ARCHIVE_NAME = 'teralth-default-theme-source.zip';
+const ARCHIVE_NAME = 'default.zip';
 const MAX_SOURCE_FILE_BYTES = 5 * 1024 * 1024;
 const ARCHIVE_README = `Teralth Wiki — Default page source
 
-This editable source bundle contains the public page shell and its stylesheet,
-plus the Default theme settings and stylesheet. It intentionally excludes
+This editable Default theme template contains its settings and stylesheet at the
+archive root, plus copies of the public page shell and stylesheet under source/.
+It intentionally excludes
 server code, secrets, dependencies, and executable JavaScript.
 
 Files:
-- public/index.html: page structure and interface landmarks.
-- public/styles.css: page and responsive styles.
-- theme/settings.json: settings displayed in the Themes panel.
-- theme/theme.css: scoped Default theme stylesheet.
+- settings.json: theme identity and settings displayed in the Themes panel.
+- theme.css: scoped stylesheet used by the theme.
+- source/public/index.html: public page shell reference for theme authors.
+- source/public/styles.css: full public stylesheet reference for theme authors.
 
-Keep the IDs and data attributes used by the application when editing the HTML.
-The panel's installable theme ZIP format remains settings.json + theme.css at
-the archive root; this bundle is the editable full-page source reference.
+Edit settings.json and theme.css, give the theme a name other than Default, and
+upload this ZIP in the Themes panel. The source/public files are retained as editable reference files;
+the application continues to render its own public shell and does not execute
+or serve uploaded HTML. Do not add scripts, secrets, or external asset URLs.
 `;
 
 async function readProjectFile(projectRoot, relativePath) {
@@ -43,17 +45,22 @@ async function readProjectFile(projectRoot, relativePath) {
 
 async function writeThemeSourceArchive(projectRoot = path.resolve(__dirname, '..'), destination) {
   const root = await fs.promises.realpath(projectRoot);
-  const themesDirectory = path.join(root, 'themes');
-  await fs.promises.mkdir(themesDirectory, { recursive: true, mode: 0o750 });
-  const target = destination || path.join(themesDirectory, ARCHIVE_NAME);
-  const resolvedTarget = path.resolve(target);
-  if (!resolvedTarget.startsWith(themesDirectory + path.sep)) throw new Error('THEME_SOURCE_PATH_INVALID');
+  const outputDirectory = destination
+    ? path.resolve(path.dirname(destination))
+    : path.join(root, 'themes');
+  await fs.promises.mkdir(outputDirectory, { recursive: true, mode: 0o750 });
+  const themesStat = await fs.promises.lstat(outputDirectory);
+  if (themesStat.isSymbolicLink() || !themesStat.isDirectory()) throw new Error('THEME_SOURCE_ROOT_INVALID');
+  const realOutputDirectory = await fs.promises.realpath(outputDirectory);
+  if (destination && path.basename(path.resolve(destination)) !== ARCHIVE_NAME)
+    throw new Error('THEME_SOURCE_PATH_INVALID');
+  const resolvedTarget = path.join(realOutputDirectory, ARCHIVE_NAME);
   const archive = new yazl.ZipFile();
   const sources = [
-    ['public/index.html', 'public/index.html'],
-    ['public/styles.css', 'public/styles.css'],
-    ['scripts/default-theme/settings.json', 'theme/settings.json'],
-    ['scripts/default-theme/theme.css', 'theme/theme.css'],
+    ['scripts/default-theme/settings.json', 'settings.json'],
+    ['scripts/default-theme/theme.css', 'theme.css'],
+    ['public/index.html', 'source/public/index.html'],
+    ['public/styles.css', 'source/public/styles.css'],
   ];
   try {
     for (const [source, archivePath] of sources)
@@ -76,6 +83,8 @@ async function writeThemeSourceArchive(projectRoot = path.resolve(__dirname, '..
 }
 
 async function ensureThemeSourceArchive(themesDirectory) {
+  const rootStat = await fs.promises.lstat(themesDirectory);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw new Error('THEME_SOURCE_ROOT_INVALID');
   const root = await fs.promises.realpath(themesDirectory);
   const target = path.join(root, ARCHIVE_NAME);
   try {

@@ -17,7 +17,7 @@ function validateThemeArchivePath(archivePath) {
   const index = archivePath.lastIndexOf(marker);
   if (index < 0) return true;
   const themePath = archivePath.slice(index + marker.length);
-  return /^(?!default\/)[a-z0-9][a-z0-9_-]{0,47}\/(?:settings\.json|theme\.css|preview\.png|assets\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|avif|woff2?|ttf|otf))$/.test(themePath);
+  return /^(?!default\/)[a-z0-9][a-z0-9_-]{0,47}\/(?:settings\.json|theme\.css|preview\.png|assets\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|avif|woff2?|ttf|otf)|source\/public\/(?:index\.html|styles\.css))$/.test(themePath);
 }
 
 async function addSource(zip, source, archivePath) {
@@ -191,7 +191,7 @@ async function readBackupZip(file, imageStage, themesRoot) {
         if (parts[1] === 'application' && parts[2] === 'themes') {
           if (!themeStage || parts.length < 5 || !safeThemeSlug(parts[3])) throw new Error('BACKUP_THEME_PATH_INVALID');
           const relative = parts.slice(4).join('/');
-          if (!/^(?:settings\.json|theme\.css|preview\.png|assets\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|avif|woff2?|ttf|otf))$/.test(relative))
+          if (!/^(?:settings\.json|theme\.css|preview\.png|assets\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|avif|woff2?|ttf|otf)|source\/public\/(?:index\.html|styles\.css))$/.test(relative))
             throw new Error('BACKUP_THEME_PATH_INVALID');
           // Backups created by older versions may contain this folder. Ignore
           // it so an archive cannot replace the application's bundled theme.
