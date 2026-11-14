@@ -9578,7 +9578,7 @@ body.light.wiki-mode .shell:has(#articleWrap:not([hidden])) {
   --line-soft: #e4e4df;
   --text: #222321;
   --muted: #5d5e59;
-  --faint: #777872;
+  --faint: #696a65;
   --accent: #41423e;
   --accent-strong: #252623;
   --surface: #ffffff;
@@ -9586,6 +9586,19 @@ body.light.wiki-mode .shell:has(#articleWrap:not([hidden])) {
   --control-border: #c9cac4;
   --nav-active: #e5e5e1;
   color-scheme: light;
+}
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .brand-subtitle,
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .sidebar-version,
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .nav-group-title,
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .search-box kbd,
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .search-suggestion small,
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .site-footer,
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .last-edited-label,
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .last-edited-card time {
+  font-size: 11px;
+}
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .sidebar-version {
+  color: var(--muted);
 }
 body.wiki-mode .shell:has(#articleWrap:not([hidden])) .article .code-block,
 body.wiki-mode .shell:has(#articleWrap:not([hidden])) .article .wiki-spoiler {

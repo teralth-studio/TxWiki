@@ -17,7 +17,7 @@
       <div class="installer-grid">
         <nav class="setup-aside" aria-label="Setup steps">
           <button class="aside-step" type="button" data-step="0"><span class="step-indicator"></span><strong data-es="Clave de instalación" data-en="Setup Key">Setup Key</strong></button>
-          <button class="aside-step" type="button" data-step="1"><span class="step-indicator"></span><strong data-es="Base de datos" data-en="Database">Database</strong></button>
+          <button class="aside-step" type="button" data-step="1"><span class="step-indicator"></span><strong data-es="Bases de datos" data-en="Databases">Databases</strong></button>
           <button class="aside-step" type="button" data-step="2"><span class="step-indicator"></span><strong>SMTP</strong></button>
           <button class="aside-step" type="button" data-step="3"><span class="step-indicator"></span><strong data-es="Sitio web" data-en="Website">Website</strong></button>
           <button class="aside-step" type="button" data-step="4"><span class="step-indicator"></span><strong data-es="Administrador" data-en="Administrator">Administrator</strong></button>
@@ -44,7 +44,7 @@
             <div class="form-actions"><button id="nextSetupKey" class="button-primary" type="button" data-es="Continuar" data-en="Continue">Continue</button></div>
           </section>
           <section class="setup-page" data-page="1" hidden>
-            <div class="form-heading"><h1 data-es="Base de datos" data-en="Database">Database</h1><p data-es="Elige SQLite o MySQL/MariaDB para almacenar usuarios y contenido." data-en="Choose SQLite or MySQL/MariaDB to store users and wiki content.">Choose SQLite or MySQL/MariaDB to store users and wiki content.</p></div>
+            <div class="form-heading"><h1 data-es="Bases de datos" data-en="Databases">Databases</h1><p data-es="Elige SQLite o MySQL/MariaDB para almacenar usuarios y contenido." data-en="Choose SQLite or MySQL/MariaDB to store users and wiki content.">Choose SQLite or MySQL/MariaDB to store users and wiki content.</p></div>
             <label class="wide"><span data-es="Motor de base de datos" data-en="Database engine">Database engine</span><select id="dbType"><option value="mysql" data-es="MySQL / MariaDB (recomendado)" data-en="MySQL / MariaDB (recommended)">MySQL / MariaDB (recommended)</option><option value="sqlite">SQLite</option></select></label>
             <div id="sqliteWarning" class="inline-message warning" role="note" hidden data-es="SQLite no requiere un servicio externo y es adecuada para instalaciones pequeñas o de una sola instancia. Para más tráfico, concurrencia o varias instancias, recomendamos MySQL/MariaDB." data-en="SQLite needs no external service and suits small or single-instance installations. For higher traffic, concurrency, or multiple instances, we recommend MySQL/MariaDB.">SQLite needs no external service and suits small or single-instance installations. For higher traffic, concurrency, or multiple instances, we recommend MySQL/MariaDB.</div>
             <div id="sqliteFields" class="field-grid" hidden>

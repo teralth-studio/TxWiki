@@ -144,7 +144,7 @@ const spaceMarkMarkup = (space) =>
 const t = (es, en) => {
   const english = en ?? es,
     locale = String(state.lang || 'en').toLowerCase(),
-    value = String(state.translations?.[english] ?? (locale.startsWith('en') ? english : es));
+    value = String(state.translations?.[english] ?? (locale.startsWith('es') ? es : english));
   return value.replace(/[<>\"]/g, (character) => ({ '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]);
 };
 function hasCookieConsent() {
@@ -637,7 +637,7 @@ function localizedMessage(message) {
   if (locale.startsWith('es')) return message;
   const english =
     translations[message] || 'The request could not be completed. Check the information and try again.';
-  return locale.startsWith('en') ? english : state.translations?.[english] || message;
+  return locale.startsWith('en') ? english : state.translations?.[english] || english;
 }
 function showCouldNotStart(error, source = 'handled', context = {}) {
   if (!(error && typeof error === 'object' && error.clientReported))

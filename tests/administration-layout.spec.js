@@ -391,6 +391,49 @@ test('SMTP and CAPTCHA settings keep their controls after grouping', async ({ pa
 });
 
 for (const width of [1440, 390]) {
+  test(`installer puts Setup Key before database configuration and switches engine fields at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.route('**/api/setup/status', route => route.fulfill({ json: { host: '0.0.0.0', port: 3000 } }));
+    await page.route('**/api/setup/test-db', route => route.fulfill({ json: { ok: true } }));
+    await page.goto(`${origin}/installer.html`);
+
+    await expect(page.locator('.aside-step').nth(0)).toContainText('Setup Key');
+    await expect(page.locator('.aside-step').nth(1)).toContainText('Databases');
+    await expect(page.locator('.setup-page[data-page="0"] h1')).toHaveText('Setup Key');
+    await expect(page.locator('#setupCode')).toBeVisible();
+    await expect(page.locator('.setup-page[data-page="1"]')).toBeHidden();
+
+    await page.locator('#setupCode').fill('playwright-test-setup-key');
+    await page.locator('#nextSetupKey').click();
+    await expect(page.locator('.setup-page[data-page="1"] h1')).toHaveText('Databases');
+
+    await page.locator('#dbType').selectOption('sqlite');
+    await expect(page.locator('#dbSqliteFile')).toBeVisible();
+    await expect(page.locator('#dbHost')).toBeHidden();
+    await expect(page.locator('#dbSslRow')).toBeHidden();
+
+    await page.locator('#dbType').selectOption('mysql');
+    await expect(page.locator('#dbHost')).toBeVisible();
+    await expect(page.locator('#dbPassword')).toBeVisible();
+    await expect(page.locator('#dbSslRow')).toBeVisible();
+
+    await page.locator('#languageToggle').click();
+    await expect(page.locator('.setup-page[data-page="1"] h1')).toHaveText('Bases de datos');
+  });
+}
+
+test('installer body copy and helper text stay legible', async ({ page }) => {
+  await page.route('**/api/setup/status', route => route.fulfill({ json: { host: '0.0.0.0', port: 3000 } }));
+  await page.goto(`${origin}/installer.html`);
+  const bodySize = await page.locator('body').evaluate(element => parseFloat(getComputedStyle(element).fontSize));
+  const helperSize = await page.locator('#setupCode + small').evaluate(element => parseFloat(getComputedStyle(element).fontSize));
+  const labelSize = await page.locator('label[for="setupCode"]').evaluate(element => parseFloat(getComputedStyle(element).fontSize));
+  expect(bodySize).toBeGreaterThanOrEqual(14);
+  expect(helperSize).toBeGreaterThanOrEqual(12);
+  expect(labelSize).toBeGreaterThanOrEqual(12);
+});
+
+for (const width of [1440, 390]) {
   test(`installer groups website fields and upload controls at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.route('**/api/setup/status', route => route.fulfill({ json: { host: '0.0.0.0', port: 3000 } }));
