@@ -87,21 +87,24 @@ test('legacy backup migration skips the bundled Default theme under an archive p
   ]);
 });
 
-test('backup errors identify unsupported files inside a custom theme', async (t) => {
+test('backup omits unsupported files inside a custom theme and keeps supported files', async (t) => {
   const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'txwiki-invalid-theme-backup-'));
   t.after(() => fs.promises.rm(directory, { recursive: true, force: true }));
   const themeDirectory = path.join(directory, 'themes', 'custom');
   await fs.promises.mkdir(themeDirectory, { recursive: true });
+  await fs.promises.writeFile(path.join(themeDirectory, 'settings.json'), '{}');
+  await fs.promises.writeFile(path.join(themeDirectory, 'theme.css'), 'body {}');
   await fs.promises.writeFile(path.join(themeDirectory, 'README.md'), 'unsupported theme file');
 
-  await assert.rejects(
-    createBackupZipStreamFromSources(
+  const stream = await createBackupZipStreamFromSources(
       'fixture',
       [{ source: path.join(directory, 'themes'), archivePath: 'application/themes' }],
       Buffer.from('encrypted-database'),
-    ),
-    (error) =>
-      error.code === 'BACKUP_THEME_PATH_INVALID' &&
-      error.message === 'BACKUP_THEME_PATH_INVALID: custom/README.md',
-  );
+    );
+  const entries = await listZipEntries(await collect(stream));
+  assert.deepEqual(entries.sort(), [
+    'fixture/application/themes/custom/settings.json',
+    'fixture/application/themes/custom/theme.css',
+    'fixture/database.json.enc',
+  ]);
 });

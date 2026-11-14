@@ -15,14 +15,9 @@ const imagePattern = /^[A-Za-z0-9_-]{16}\.(?:png|jpg|gif|webp)$/i;
 function validateThemeArchivePath(archivePath) {
   const marker = 'application/themes/';
   const index = archivePath.lastIndexOf(marker);
-  if (index < 0) return;
+  if (index < 0) return true;
   const themePath = archivePath.slice(index + marker.length);
-  if (!/^(?!default\/)[a-z0-9][a-z0-9_-]{0,47}\/(?:settings\.json|theme\.css|preview\.png|assets\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|avif|woff2?|ttf|otf))$/.test(themePath)) {
-    const safePath = themePath.replace(/[\u0000-\u001f\u007f]/g, '?').slice(0, 240);
-    const error = new Error(`BACKUP_THEME_PATH_INVALID: ${safePath}`);
-    error.code = 'BACKUP_THEME_PATH_INVALID';
-    throw error;
-  }
+  return /^(?!default\/)[a-z0-9][a-z0-9_-]{0,47}\/(?:settings\.json|theme\.css|preview\.png|assets\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|avif|woff2?|ttf|otf))$/.test(themePath);
 }
 
 async function addSource(zip, source, archivePath) {
@@ -44,7 +39,12 @@ async function addSource(zip, source, archivePath) {
     const entryPath = relativePath ? `${archivePath}/${relativePath}` : archivePath;
     if (entryPath.split('/').some(part => !part || part === '.' || part === '..'))
       throw new Error('BACKUP_PATH_INVALID');
-    validateThemeArchivePath(entryPath);
+    if (!validateThemeArchivePath(entryPath)) {
+      const relativeThemePath = entryPath.slice(entryPath.lastIndexOf('application/themes/') + 'application/themes/'.length);
+      const safePath = relativeThemePath.replace(/[\u0000-\u001f\u007f]/g, '?').slice(0, 240);
+      console.warn('[Teralth Wiki] Backup omitted an unsupported theme file:', safePath);
+      return;
+    }
     zip.addFile(absolute, entryPath, { mode: 0o600, compress: true });
   }
 
