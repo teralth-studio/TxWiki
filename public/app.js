@@ -2065,8 +2065,13 @@ function setView(view) {
   $('#adminNavigation').hidden = view !== 'adminPanel';
   const fullScreen = ['authPanel', 'passwordWall'].includes(view);
   document.body.classList.toggle('auth-fullscreen', fullScreen);
+  syncBrowserThemeColor();
   $('#toc').hidden = view !== 'articleWrap';
   $('#notice').hidden = true;
+}
+function syncBrowserThemeColor() {
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = document.body.classList.contains('light') ? '#f7f7f5' : '#191715';
 }
 function syncWikiTheme(enabled) {
   const linkId = 'activeWikiTheme';
@@ -7876,6 +7881,7 @@ document.addEventListener('keydown', (event) => {
 $('#themeToggle').onclick = () => {
   document.body.classList.toggle('light');
   localStorage.setItem('wiki-theme', document.body.classList.contains('light') ? 'light' : 'dark');
+  syncBrowserThemeColor();
 };
 $('#searchInput').oninput = (e) => {
   clearTimeout(searchDebounceTimer);

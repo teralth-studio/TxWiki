@@ -81,6 +81,7 @@ function safeFilePath(value) {
   return (
     value === 'server.js' ||
     value === 'launcher.js' ||
+    value === 'schema.sqlite.sql' ||
     value === 'pterodactyl-start.js' ||
     /^public\/(?:app|admin-updates|installer|maintenance)\.js$/.test(value) ||
     /^public\/(?:styles|installer|maintenance)\.css$/.test(value) ||

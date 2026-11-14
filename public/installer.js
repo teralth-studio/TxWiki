@@ -3,7 +3,7 @@ const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selec
 let language = localStorage.getItem('installer-language') === 'es' ? 'es' : 'en';
 let currentStep = 0, furthestStep = 0, databasePassed = false, emailPassed = false;
 let databaseTestRun = 0, emailTestRun = 0, installing = false;
-const databaseFields = ['dbHost', 'dbPort', 'dbName', 'dbUser', 'dbPassword', 'dbSsl'];
+const databaseFields = ['dbType', 'dbSqliteFile', 'dbHost', 'dbPort', 'dbName', 'dbUser', 'dbPassword', 'dbSsl'];
 const emailFields = ['smtpHost', 'smtpPort', 'smtpUser', 'smtpPassword', 'smtpFrom', 'smtpTestEmail', 'smtpSecure'];
 const fields = [...databaseFields, ...emailFields, 'siteName', 'baseUrl', 'nodeEnv', 'appHost', 'appPort',
   'adminUsername', 'adminEmail', 'adminPassword', 'adminPasswordConfirm'];
@@ -41,11 +41,11 @@ function showFatal(code) {
 function renderSteps() {
   $$('.setup-page').forEach((page, index) => { page.hidden = index !== currentStep; });
   $$('.aside-step').forEach((button, index) => {
-    const done = index < currentStep && (index !== 0 || databasePassed) && (index !== 1 || emailPassed);
+    const done = index < currentStep && (index !== 1 || databasePassed) && (index !== 2 || emailPassed);
     button.classList.toggle('active', index === currentStep);
     button.classList.toggle('done', done);
-    button.disabled = installing || index > furthestStep || index === 4 ||
-      (index > 0 && !databasePassed) || (index > 1 && !emailPassed);
+    button.disabled = installing || index > furthestStep || index === 5 ||
+      (index > 1 && !databasePassed) || (index > 2 && !emailPassed);
     if (index === currentStep) button.setAttribute('aria-current', 'step');
     else button.removeAttribute('aria-current');
     $('.step-indicator', button).textContent = done ? '✓' : String(index + 1);
@@ -113,7 +113,9 @@ async function testConnection(kind) {
     const passed = tested === fingerprint(ids);
     if (db) databasePassed = passed; else emailPassed = passed;
     if (passed) message(selector, db
-      ? t('Conexión a la base de datos correcta.', 'Database connected successfully.')
+      ? (collect(['dbType']).dbType === 'sqlite'
+          ? t('Archivo SQLite accesible y listo para instalar.', 'SQLite file is accessible and ready for installation.')
+          : t('Conexión a MySQL/MariaDB correcta.', 'MySQL/MariaDB connected successfully.'))
       : t('Conexión SMTP correcta. Se envió el correo de prueba.', 'SMTP connected successfully. Test email sent.'), true);
   } catch (error) {
     if (run !== (db ? databaseTestRun : emailTestRun)) return;
@@ -121,7 +123,7 @@ async function testConnection(kind) {
       console.error('[Teralth Wiki] Installer connection test failed:', error.status);
       return showFatal('SETUP_CONNECTION_ERROR');
     }
-    message(selector, `[${db ? 'MySQL' : 'SMTP'}] ${t('Ocurrió un error', 'An error occurred')}: ${firstErrorLine(error)}`);
+    message(selector, `[${db ? ($('#dbType').value === 'sqlite' ? 'SQLite' : 'MySQL/MariaDB') : 'SMTP'}] ${t('Ocurrió un error', 'An error occurred')}: ${firstErrorLine(error)}`);
   } finally {
     if (run === (db ? databaseTestRun : emailTestRun)) {
       button.disabled = false;
@@ -130,7 +132,7 @@ async function testConnection(kind) {
   }
 }
 function checkWebsite() {
-  const inputs = $$('.setup-page[data-page="2"] input[required]');
+  const inputs = $$('.setup-page[data-page="3"] input[required]');
   const invalid = inputs.find((input) => !input.value.trim() || !input.validity.valid);
   if (invalid) {
     invalid.focus();
@@ -258,7 +260,7 @@ async function waitForWiki() {
 }
 async function runInstall() {
   installing = true;
-  goToStep(4);
+  goToStep(5);
   progress(0, 'preparing');
   $('#installError').hidden = true;
   $('#retryInstall').hidden = true;
@@ -328,25 +330,48 @@ for (const id of emailFields) {
 }
 for (const id of ['adminPassword', 'adminPasswordConfirm']) $('#' + id).addEventListener('input', updatePassword);
 for (const id of ['adminUsername', 'adminEmail']) $('#' + id).addEventListener('input', () => { $('#adminMessage').hidden = true; });
-$$('.setup-page[data-page="2"] input, .setup-page[data-page="2"] select').forEach((input) =>
+$$('.setup-page[data-page="3"] input, .setup-page[data-page="3"] select').forEach((input) =>
   input.addEventListener('change', () => { $('#websiteMessage').hidden = true; }));
 $('#testDatabase').addEventListener('click', () => testConnection('db'));
 $('#testSmtp').addEventListener('click', () => testConnection('smtp'));
-$('#nextDatabase').addEventListener('click', () => { if (databasePassed) goToStep(1); });
-$('#nextSmtp').addEventListener('click', () => { if (databasePassed && emailPassed) goToStep(2); });
-$('#nextWebsite').addEventListener('click', () => { if (databasePassed && emailPassed && checkWebsite()) goToStep(3); });
+$('#nextSetupKey').addEventListener('click', () => {
+  if (!$('#setupCode').value.trim()) {
+    message('#keyMessage', t('Introduce el código que está en setup.key.', 'Enter the code stored in setup.key.'));
+    $('#setupCode').focus();
+    return;
+  }
+  $('#keyMessage').hidden = true;
+  goToStep(1);
+});
+function renderDatabaseFields() {
+  const sqlite = $('#dbType').value === 'sqlite';
+  $('#sqliteFields').hidden = !sqlite;
+  $('#mysqlFields').hidden = sqlite;
+  $('#dbSslRow').hidden = sqlite;
+  $('#sqliteWarning').hidden = !sqlite;
+  for (const id of ['dbHost','dbPort','dbName','dbUser','dbPassword']) $('#' + id).required = !sqlite;
+  $('#dbSqliteFile').required = sqlite;
+}
+$('#dbType').addEventListener('change', () => {
+  renderDatabaseFields();
+  invalidateDatabase();
+});
+$('#nextDatabase').addEventListener('click', () => { if (databasePassed) goToStep(2); });
+$('#nextSmtp').addEventListener('click', () => { if (databasePassed && emailPassed) goToStep(3); });
+$('#nextWebsite').addEventListener('click', () => { if (databasePassed && emailPassed && checkWebsite()) goToStep(4); });
 $$('.back').forEach((button) => button.addEventListener('click', () => goToStep(currentStep - 1)));
 $$('.aside-step').forEach((button) => button.addEventListener('click', () => goToStep(Number(button.dataset.step))));
-$('#retryInstall').addEventListener('click', () => goToStep(3));
+$('#retryInstall').addEventListener('click', () => goToStep(4));
 $('#setupForm').addEventListener('submit', (event) => {
   event.preventDefault();
-  if (currentStep !== 3 || installing) return;
-  if (!databasePassed) return goToStep(0);
-  if (!emailPassed) return goToStep(1);
-  if (!checkWebsite()) return goToStep(2);
+  if (currentStep !== 4 || installing) return;
+  if (!databasePassed) return goToStep(1);
+  if (!emailPassed) return goToStep(2);
+  if (!checkWebsite()) return goToStep(3);
   if (checkAdmin()) runInstall();
 });
 setLanguage(language);
+renderDatabaseFields();
 renderSteps();
 initialize();
 $('#setupCode').focus();

@@ -6,6 +6,8 @@ const { spawn } = require('node:child_process');
 const express = require('express');
 const helmet = require('helmet');
 const mysql = require('mysql2/promise');
+const BetterSqlite3 = require('better-sqlite3');
+const { resolveSqlitePath } = require('./scripts/database');
 const nodemailer = require('nodemailer');
 const { rateLimit } = require('express-rate-limit');
 const { createSiteRateLimiter } = require('./scripts/site-rate-limit');
@@ -19,10 +21,6 @@ const setupKeyPath = path.join(root, 'setup.key');
 dotenv.config({ path: envPath });
 const requiredKeys = [
   'SESSION_SECRET',
-  'DB_HOST',
-  'DB_USER',
-  'DB_PASSWORD',
-  'DB_NAME',
   'ADMIN_INITIAL_PASSWORD',
   'ADMIN_EMAIL',
   'ADMIN_USERNAME',
@@ -31,8 +29,15 @@ const requiredKeys = [
 const hasUnchangedExamples = requiredKeys.some((key) =>
   /^(replace-with|admin@example\.com)$/i.test(String(process.env[key] || '').trim()),
 );
-const isConfigured =
-  requiredKeys.every((key) => Boolean(String(process.env[key] || '').trim())) && !hasUnchangedExamples;
+const storedDatabaseType = String(process.env.DB_TYPE || 'mysql').trim().toLowerCase();
+const mysqlDatabaseConfigurationPresent = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME']
+  .every((key) => Boolean(String(process.env[key] || '').trim())) &&
+  !/^replace-with(?:-|$)/i.test(String(process.env.DB_PASSWORD || '').trim());
+const databaseConfigurationPresent = storedDatabaseType === 'sqlite'
+  ? Boolean(String(process.env.DB_SQLITE_PATH || '').trim())
+  : storedDatabaseType === 'mysql' && mysqlDatabaseConfigurationPresent;
+const isConfigured = requiredKeys.every((key) => Boolean(String(process.env[key] || '').trim())) &&
+  databaseConfigurationPresent && !hasUnchangedExamples;
 class SetupInputError extends Error {}
 
 function startWiki() {
@@ -89,16 +94,40 @@ function cleanText(value, max = 255) {
 }
 
 function validateDatabase(body) {
+  const type = String(body.dbType || 'mysql').trim().toLowerCase();
+  if (type === 'sqlite') {
+    const filename = cleanText(body.dbSqliteFile || 'teralth-wiki.sqlite', 110);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,100}\.(?:sqlite|sqlite3|db)$/i.test(filename))
+      throw new SetupInputError('El archivo SQLite debe ser un nombre simple terminado en .sqlite, .sqlite3 o .db.');
+    return { type, filename };
+  }
+  if (type !== 'mysql') throw new SetupInputError('Selecciona SQLite o MySQL/MariaDB.');
   const host = cleanText(body.dbHost, 255);
   const database = cleanText(body.dbName, 64);
   const user = cleanText(body.dbUser, 128);
   const password = cleanText(body.dbPassword, 1024);
   const port = Number(body.dbPort);
   if (!validPort(port)) throw new SetupInputError('El puerto MySQL debe estar entre 1 y 65535.');
-  return { host, port, database, user, password, ssl: body.dbSsl === true };
+  return { type, host, port, database, user, password, ssl: body.dbSsl === true };
 }
 
 async function verifyDatabase(credentials, checkSchemaAccess = false) {
+  if (credentials.type === 'sqlite') {
+    const { filename } = resolveSqlitePath({ DB_SQLITE_PATH: path.join('./data', credentials.filename), DATA_DIR: './data' }, root);
+    fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+    const db = new BetterSqlite3(filename, { timeout: 8000 });
+    try {
+      db.pragma('foreign_keys = ON');
+      db.pragma('busy_timeout = 8000');
+      db.prepare('SELECT 1').get();
+      if (checkSchemaAccess) {
+        const probe = `wiki_setup_probe_${crypto.randomBytes(8).toString('hex')}`;
+        db.exec(`CREATE TABLE "${probe}" (id INTEGER PRIMARY KEY)`);
+        db.exec(`DROP TABLE "${probe}"`);
+      }
+    } finally { db.close(); }
+    return;
+  }
   const connection = await mysql.createConnection({
     host: credentials.host,
     port: credentials.port,
@@ -233,7 +262,7 @@ function validateInstall(body) {
   if (!validSender(smtpFrom)) throw new SetupInputError('Ingresa un remitente SMTP con correo válido.');
   if (Boolean(smtpUser) !== Boolean(smtpPassword))
     throw new SetupInputError('Completa tanto el usuario SMTP como su contraseña, o deja ambos vacíos.');
-  return {
+  const configuration = {
     NODE_ENV: nodeEnv,
     HOST: host,
     PORT: String(port),
@@ -243,12 +272,6 @@ function validateInstall(body) {
     ADMIN_USERNAME: username,
     ADMIN_INITIAL_PASSWORD: password,
     BASE_URL: baseUrl,
-    DB_HOST: db.host,
-    DB_PORT: String(db.port),
-    DB_SSL: String(db.ssl),
-    DB_USER: db.user,
-    DB_PASSWORD: db.password,
-    DB_NAME: db.database,
     DB_POOL_LIMIT: '5',
     DATA_DIR: './data',
     SMTP_HOST: smtpHost,
@@ -258,6 +281,26 @@ function validateInstall(body) {
     SMTP_PASS: smtpPassword,
     SMTP_FROM: smtpFrom,
   };
+  if (db.type === 'sqlite') {
+    configuration.DB_TYPE = 'sqlite';
+    configuration.DB_SQLITE_PATH = `./data/${db.filename}`;
+    configuration.DB_HOST = '';
+    configuration.DB_PORT = '';
+    configuration.DB_SSL = 'false';
+    configuration.DB_USER = '';
+    configuration.DB_PASSWORD = '';
+    configuration.DB_NAME = '';
+  } else {
+    configuration.DB_TYPE = 'mysql';
+    configuration.DB_HOST = db.host;
+    configuration.DB_PORT = String(db.port);
+    configuration.DB_SSL = String(db.ssl);
+    configuration.DB_USER = db.user;
+    configuration.DB_PASSWORD = db.password;
+    configuration.DB_NAME = db.database;
+    configuration.DB_SQLITE_PATH = '';
+  }
+  return configuration;
 }
 
 function saveEnvironment(configuration) {
@@ -366,11 +409,13 @@ if (isConfigured) {
       const credentials = validateDatabase(req.body);
       await verifyDatabase(credentials);
       rememberSignature(verifiedDbSignatures, databaseSignature(req.body));
-      res.json({ ok: true, message: 'Conexión MySQL correcta.' });
+      res.json({ ok: true, message: credentials.type === 'sqlite' ? 'Archivo SQLite accesible.' : 'Conexión MySQL/MariaDB correcta.' });
     } catch (error) {
       res.status(400).json({
         error:
-          'No se pudo conectar a esa base MySQL. Revisa host, puerto, nombre, usuario, contraseña y SSL.',
+          req.body?.dbType === 'sqlite'
+            ? 'No se pudo abrir el archivo SQLite. Revisa el nombre del archivo y los permisos de escritura en ./data.'
+            : 'No se pudo conectar a esa base MySQL/MariaDB. Revisa host, puerto, nombre, usuario, contraseña y SSL.',
         details: diagnosticDetails(error, [
           req.body?.dbHost,
           req.body?.dbName,
@@ -452,7 +497,7 @@ if (isConfigured) {
     try {
       const configuration = validateInstall(req.body);
       if (!verifiedDbSignatures.has(databaseSignature(req.body)))
-        throw new SetupInputError('Prueba la conexión MySQL con los datos que vas a guardar.');
+         throw new SetupInputError('Prueba la base de datos seleccionada con los datos que vas a guardar.');
       if (!verifiedEmailSignatures.has(emailSignature(req.body)))
         throw new SetupInputError('Envía el correo de prueba con la configuración SMTP que vas a guardar.');
       installInProgress = true;
@@ -491,7 +536,7 @@ if (isConfigured) {
       console.error('Could not complete the installation:', error.code || error.name || 'Error');
       res.status(500).json({
         error:
-          'No se pudo validar MySQL o guardar la configuración. Revisa los datos de conexión y los permisos del servidor.',
+          'No se pudo validar la base de datos seleccionada o guardar la configuración. Revisa los datos de conexión y los permisos del servidor.',
       });
     } finally {
       installInProgress = false;

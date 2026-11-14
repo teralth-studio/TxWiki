@@ -18,6 +18,7 @@ const includedRootFiles = new Set([
   'pterodactyl-start.js',
   'playwright.config.js',
   'schema.sql',
+  'schema.sqlite.sql',
   'server.js',
 ]);
 const includedDirectories = ['.github', 'emails', 'languages', 'public', 'scripts', 'tests'];

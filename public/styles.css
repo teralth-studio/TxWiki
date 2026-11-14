@@ -10172,3 +10172,362 @@ body.light .wiki-toast.wiki-toast-error.swal2-popup.swal2-toast .swal2-html-cont
     justify-content: flex-end;
   }
 }
+
+/* Mobile layout stability for the reader, admin, and full-screen account views. */
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+body,
+.shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+button,
+a,
+[role='button'],
+select {
+  touch-action: manipulation;
+}
+button,
+[role='button'],
+.admin-tabs button,
+.editor-toolbar button,
+.drag-handle {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+button:active,
+a:active,
+[role='button']:active {
+  transition-duration: 100ms;
+}
+img,
+video,
+iframe {
+  max-width: 100%;
+}
+.article,
+.admin-panel,
+.admin-section,
+.main-column,
+.editor-mode .admin-panel {
+  min-width: 0;
+}
+
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select,
+  .settings-input,
+  .field input,
+  .field select,
+  .field textarea {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 940px) {
+  body.wiki-mode,
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])),
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .reading-layout,
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .sidebar-slot,
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .sidebar {
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .reading-layout {
+    grid-template-rows: minmax(0, auto) auto auto;
+    overflow-x: clip;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .main-column {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 680px) {
+  html {
+    scroll-padding-top: calc(64px + env(safe-area-inset-top, 0px));
+  }
+
+  body:not(.auth-fullscreen):not(.editor-mode) .topbar {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-left: max(8px, env(safe-area-inset-left, 0px));
+    padding-right: max(8px, env(safe-area-inset-right, 0px));
+  }
+
+  body:not(.auth-fullscreen):not(.editor-mode) .main-column {
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+  }
+
+  body.wiki-mode {
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .reading-layout {
+    height: 100vh;
+    height: 100dvh;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, auto) auto auto;
+    overflow-x: clip;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: auto;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .topbar {
+    min-height: calc(56px + env(safe-area-inset-top, 0px));
+    height: auto;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-left: max(8px, env(safe-area-inset-left, 0px));
+    padding-right: max(8px, env(safe-area-inset-right, 0px));
+  }
+
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .main-column {
+    padding-top: calc(56px + env(safe-area-inset-top, 0px));
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+  }
+
+  body.wiki-mode .shell:has(#headerLinks:not([hidden])) .topbar {
+    min-height: calc(92px + env(safe-area-inset-top, 0px));
+  }
+
+  body.wiki-mode .shell:has(#headerLinks:not([hidden])) .main-column {
+    padding-top: calc(92px + env(safe-area-inset-top, 0px));
+  }
+
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .sidebar {
+    height: 100vh;
+    height: 100dvh;
+    padding-top: max(12px, env(safe-area-inset-top, 0px));
+    padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+    overscroll-behavior: contain;
+  }
+
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .toc {
+    min-width: 0;
+    padding-left: max(14px, env(safe-area-inset-left, 0px));
+    padding-right: max(14px, env(safe-area-inset-right, 0px));
+  }
+
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) > .reading-layout > .site-footer {
+    padding-left: max(14px, env(safe-area-inset-left, 0px));
+    padding-right: max(14px, env(safe-area-inset-right, 0px));
+    padding-bottom: max(14px, env(safe-area-inset-bottom, 0px));
+    overflow-wrap: anywhere;
+  }
+
+  .article {
+    overflow-wrap: anywhere;
+  }
+
+  .article :is(pre, table) {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .article :is(img, video, iframe, .video-embed) {
+    max-width: 100%;
+  }
+
+  .admin-mode .shell {
+    display: flex;
+    min-height: 100vh;
+    min-height: 100dvh;
+    flex-direction: column;
+    overflow-x: clip;
+  }
+
+  .admin-mode .main-column {
+    width: 100%;
+    min-height: 100dvh;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .admin-mode .topbar {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-left: max(8px, env(safe-area-inset-left, 0px));
+    padding-right: max(8px, env(safe-area-inset-right, 0px));
+  }
+
+  .admin-mode .admin-panel {
+    width: 100%;
+    max-width: none;
+    padding-top: 24px;
+    padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .admin-mode .admin-tabs {
+    width: calc(100% + 10px);
+    margin-right: -10px;
+    padding-right: 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .admin-mode .admin-section,
+  .admin-mode .settings-group,
+  .admin-mode .captcha-settings {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .admin-mode :is(input, select, textarea, button) {
+    max-width: 100%;
+  }
+
+  .admin-mode :is(.settings-row, .settings-group-grid, .proxy-fields, .smtp-fields,
+    .captcha-config-grid, .backup-settings-grid, .role-permissions, .browser-identity-grid,
+    .support-fields, .category-fields-grid, .category-edit-grid, .theme-settings-form,
+    .support-editor, .update-progress-layout) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-mode :is(.page-row, .category-row, .user-row, .space-admin-row, .backup-row,
+    .update-history-row, .audit-log-heading, .section-heading) {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .admin-mode .space-admin-row,
+  .admin-mode .user-row,
+  .admin-mode .page-row {
+    flex-wrap: wrap;
+  }
+
+  .admin-mode .space-admin-row > *,
+  .admin-mode .user-row > *,
+  .admin-mode .page-row > * {
+    min-width: 0;
+  }
+
+  .admin-mode .backup-file-input,
+  .admin-mode .backup-file-input input,
+  .admin-mode .update-file-picker,
+  .admin-mode .admin-section :is(input[type='file'], .file-input) {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .admin-mode .role-editor-identity,
+  .admin-mode .role-editor-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-mode .role-editor-identity > *,
+  .admin-mode .role-editor-fields > * {
+    min-width: 0;
+  }
+
+  .admin-mode .role-permission-group {
+    min-width: 0;
+    padding: 12px;
+  }
+
+  .admin-mode .editor-toolbar {
+    position: sticky;
+    top: calc(56px + env(safe-area-inset-top, 0px));
+    z-index: 10;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .auth-fullscreen .shell,
+  .auth-fullscreen .main-column {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  .auth-fullscreen .auth-panel,
+  .auth-fullscreen .password-wall {
+    width: min(100%, 470px);
+    padding-top: max(24px, env(safe-area-inset-top, 0px));
+    padding-bottom: max(24px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .cookie-notice {
+    right: max(12px, env(safe-area-inset-right, 0px));
+    bottom: max(12px, env(safe-area-inset-bottom, 0px));
+    left: max(12px, env(safe-area-inset-left, 0px));
+    width: auto;
+  }
+
+  .wiki-swal-popup.swal2-popup {
+    width: min(100% - 20px, 560px) !important;
+    max-width: calc(100vw - 20px) !important;
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+@media (max-width: 380px) {
+  .admin-mode .admin-section {
+    padding: 12px;
+  }
+
+  .admin-mode .admin-heading h1 {
+    font-size: 22px;
+  }
+
+  .admin-mode .section-heading > :is(button, .primary-button) {
+    min-height: 40px;
+  }
+
+  .admin-mode .language-admin-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .admin-mode .language-admin-row > input:first-child {
+    grid-column: 1;
+  }
+
+  .admin-mode .language-admin-row > input:nth-child(2) {
+    grid-column: 1;
+  }
+}
+
+@media (hover: none) {
+  .shell:has(#articleWrap:not([hidden])) .article .external-link-card:hover,
+  button:hover,
+  a:hover {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  button,
+  a,
+  [role='button'] {
+    transition-duration: 0.01ms !important;
+  }
+}

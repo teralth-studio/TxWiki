@@ -48,6 +48,9 @@ h1 { margin: 0 0 7px; font: 700 26px/1.25 Manrope, 'DM Sans', sans-serif; letter
 .form-heading p, .field-note { margin: 0; color: var(--muted); font-size: 13px; }
 .setup-code { margin-bottom: 18px; }
 .setup-code label, .field-grid label > span { display: block; margin-bottom: 6px; color: #c6c9d2; font-size: 11px; font-weight: 600; }
+.setup-page > label.wide { display: block; margin: 0 0 14px; }
+.setup-page > label.wide > span { display: block; margin-bottom: 6px; color: #c6c9d2; font-size: 11px; font-weight: 600; }
+.setup-page > label.wide > select { width: 100%; min-height: 39px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #111215; font-size: 12px; }
 .setup-code small, .field-grid small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
 .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .field-grid label { min-width: 0; }
@@ -68,6 +71,11 @@ h1 { margin: 0 0 7px; font: 700 26px/1.25 Manrope, 'DM Sans', sans-serif; letter
 .inline-message { margin: 10px 0; padding: 9px 11px; border: 1px solid currentColor; border-radius: 6px; background: #17191e; font-size: 11px; overflow-wrap: anywhere; }
 .inline-message.good { color: #91d1ad; }
 .inline-message.bad { color: #f0a9b1; }
+.inline-message.warning { color: #e4c17a; background: #242016; }
+.setup-guide { margin: 16px 0; }
+.setup-guide summary { color: var(--text); font-size: 12px; font-weight: 650; cursor: pointer; }
+.setup-guide ol { margin: 12px 0 2px; padding-left: 22px; color: var(--muted); font-size: 12px; line-height: 1.8; }
+.setup-guide li + li { margin-top: 5px; }
 .form-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 24px; }
 .form-actions > .button-primary { margin-left: auto; }
 .field-note { margin-top: 15px; font-size: 11px; }

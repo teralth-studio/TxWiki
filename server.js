@@ -7,7 +7,8 @@ const multer = require('multer');
 const helmet = require('helmet');
 const session = require('express-session');
 const MySQLStore = require('express-mysql-session')(session);
-const mysql = require('mysql2/promise');
+const { createDatabase, databaseType } = require('./scripts/database');
+const SqliteSessionStore = require('./scripts/sqlite-session-store');
 const bcrypt = require('bcryptjs');
 const nodemailer = require('nodemailer');
 const sanitizeHtml = require('sanitize-html');
@@ -82,7 +83,8 @@ const {
   nextCronDate,
 } = require('./scripts/backup-cron');
 
-const required = ['SESSION_SECRET', 'DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME', 'ADMIN_INITIAL_PASSWORD'];
+const required = ['SESSION_SECRET', 'ADMIN_INITIAL_PASSWORD'];
+if (databaseType() === 'mysql') required.push('DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME');
 for (const key of required) if (!process.env[key]) throw new Error(`Missing required .env setting: ${key}`);
 if (process.env.SESSION_SECRET.length < 32)
   throw new Error('SESSION_SECRET must contain at least 32 characters.');
@@ -250,31 +252,19 @@ function applyReverseProxyTrust(config) {
       ),
     );
 }
-const pool = mysql.createPool({
-  timezone: 'Z',
-  host: process.env.DB_HOST,
-  port: Number(process.env.DB_PORT || 3306),
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: true } : undefined,
-  waitForConnections: true,
-  connectionLimit: Math.min(10, Math.max(1, Number(process.env.DB_POOL_LIMIT || 5))),
-  maxIdle: 2,
-  idleTimeout: 20000,
-  queueLimit: 20,
-  enableKeepAlive: true,
-  keepAliveInitialDelay: 10000,
-  connectTimeout: 10000,
-  charset: 'utf8mb4',
-});
-pool.on('connection', (connection) =>
-  connection.query("SET time_zone = '+00:00'", (error) => {
-    if (error)
-      console.error('Could not set the MySQL connection time zone to UTC:', error.code || error.name || 'Error');
-  }),
-);
-const store = new MySQLStore({ createDatabaseTable: true }, pool);
+const activeDatabaseType = databaseType();
+const pool = createDatabase();
+if (activeDatabaseType === 'mysql') {
+  pool.on('connection', (connection) =>
+    connection.query("SET time_zone = '+00:00'", (error) => {
+      if (error)
+        console.error('Could not set the MySQL connection time zone to UTC:', error.code || error.name || 'Error');
+    }),
+  );
+}
+const store = activeDatabaseType === 'sqlite'
+  ? new SqliteSessionStore(pool)
+  : new MySQLStore({ createDatabaseTable: true }, pool);
 const expectedTables = [
   'users',
   'spaces',
@@ -651,6 +641,7 @@ const schemaIndexStatements = [
   'ALTER TABLE account_tokens ADD INDEX idx_token_expiration (purpose,expires_at,used_at)',
 ];
 async function ensureReactionUserForeignKey() {
+  if (activeDatabaseType === 'sqlite') return;
   const existing = await query(
     "SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='reactions' AND COLUMN_NAME='user_id' AND REFERENCED_TABLE_NAME='users' AND REFERENCED_COLUMN_NAME='id' LIMIT 1",
   );
@@ -683,7 +674,34 @@ async function ensureReactionUserForeignKey() {
   });
 }
 async function applySchema() {
-  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+  if (activeDatabaseType === 'sqlite') {
+    const columns = await query('SELECT TABLE_NAME,COLUMN_NAME FROM information_schema.COLUMNS');
+    const present = new Map();
+    for (const column of columns) {
+      const names = present.get(column.TABLE_NAME) || new Set();
+      names.add(column.COLUMN_NAME);
+      present.set(column.TABLE_NAME, names);
+    }
+    const additions = {
+      users: {
+        is_primary_admin: 'INTEGER NOT NULL DEFAULT 0',
+        two_factor_secret: 'TEXT NULL',
+        two_factor_recovery_codes: 'TEXT NULL',
+        two_factor_last_step: 'INTEGER NULL',
+      },
+      pages: { page_type: "TEXT NOT NULL DEFAULT 'content'", redirect_url: 'TEXT NULL' },
+      spaces: { home_page_slug: 'TEXT NULL', logo: 'TEXT NULL' },
+      reactions: { user_id: 'INTEGER NULL' },
+    };
+    for (const [table, definitions] of Object.entries(additions)) {
+      if (!present.has(table)) continue;
+      for (const [column, definition] of Object.entries(definitions))
+        if (!present.get(table).has(column))
+          await pool.query(`ALTER TABLE ${pool.escapeId(table)} ADD COLUMN ${pool.escapeId(column)} ${definition}`);
+    }
+  }
+  const schemaFile = activeDatabaseType === 'sqlite' ? 'schema.sqlite.sql' : 'schema.sql';
+  const schema = fs.readFileSync(path.join(__dirname, schemaFile), 'utf8');
   for (const statement of schema
     .split(';')
     .map((value) => value.trim())
@@ -695,7 +713,7 @@ async function applySchema() {
       throw error;
     }
   }
-  for (const statement of schemaIndexStatements) {
+  for (const statement of activeDatabaseType === 'mysql' ? schemaIndexStatements : []) {
     try {
       await pool.query(statement);
     } catch (error) {
@@ -748,7 +766,7 @@ async function repairMissingTables(force = false) {
       missingReactionColumns.length
     ) {
       await applySchema();
-      if (missing.length) console.warn(`Restored missing MySQL tables: ${missing.join(', ')}`);
+      if (missing.length) console.warn(`Restored missing database tables: ${missing.join(', ')}`);
       if (missingPageColumns.length)
         console.warn(`Restored missing page columns: ${missingPageColumns.join(', ')}`);
       if (missingSpaceColumns.length)
@@ -1701,7 +1719,7 @@ async function createBackup(onProgress = () => {}) {
       timezone: backupTimeZone,
       tables: {},
     };
-    const volatileTables = new Set(['sessions', 'account_tokens', 'rate_limit_buckets', 'background_jobs']);
+    const volatileTables = new Set(['sessions', 'account_tokens', 'rate_limit_buckets', 'background_jobs', 'txwiki_locks']);
     const persistentTables = tables.filter((row) => !volatileTables.has(row.TABLE_NAME));
     for (const [index, row] of persistentTables.entries()) {
       const tableName = row.TABLE_NAME;
@@ -1714,6 +1732,7 @@ async function createBackup(onProgress = () => {}) {
       'launcher.js',
       'server.js',
       'schema.sql',
+      'schema.sqlite.sql',
       'package.json',
       'package-lock.json',
       '.env.example',
@@ -1780,15 +1799,48 @@ async function pumpBackgroundJobs() {
     leaseTimer = null;
   const lockToken = crypto.randomUUID();
   try {
-    const [claim] = await pool.execute(
-      "UPDATE background_jobs SET status='processing',lock_token=?,locked_until=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 90 SECOND),attempts=attempts+1 WHERE available_at<=UTC_TIMESTAMP() AND (status='queued' OR (status='processing' AND locked_until<=UTC_TIMESTAMP())) ORDER BY id LIMIT 1",
-      [lockToken],
-    );
-    if (!claim.affectedRows) return;
-    const [claimedJob] = await query(
-      "SELECT id,job_type,payload,attempts FROM background_jobs WHERE lock_token=? AND status='processing' LIMIT 1",
-      [lockToken],
-    );
+    let claimedJob;
+    if (activeDatabaseType === 'sqlite') {
+      const connection = await pool.getConnection();
+      try {
+        await connection.beginTransaction();
+        const [pending] = await connection.query(
+          "SELECT id FROM background_jobs WHERE available_at<=CURRENT_TIMESTAMP AND (status='queued' OR (status='processing' AND locked_until<=CURRENT_TIMESTAMP)) ORDER BY id LIMIT 1",
+        );
+        if (!pending.length) {
+          await connection.commit();
+          return;
+        }
+        const [claim] = await connection.execute(
+          "UPDATE background_jobs SET status='processing',lock_token=?,locked_until=datetime('now','+90 seconds'),attempts=attempts+1 WHERE id=? AND (status='queued' OR (status='processing' AND locked_until<=CURRENT_TIMESTAMP))",
+          [lockToken, pending[0].id],
+        );
+        if (claim.affectedRows) {
+          const [rows] = await connection.query(
+            "SELECT id,job_type,payload,attempts FROM background_jobs WHERE lock_token=? AND status='processing' LIMIT 1",
+            [lockToken],
+          );
+          claimedJob = rows[0];
+        }
+        await connection.commit();
+      } catch (error) {
+        await connection.rollback().catch(() => {});
+        throw error;
+      } finally {
+        connection.release();
+      }
+    } else {
+      const [claim] = await pool.execute(
+        "UPDATE background_jobs SET status='processing',lock_token=?,locked_until=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 90 SECOND),attempts=attempts+1 WHERE available_at<=UTC_TIMESTAMP() AND (status='queued' OR (status='processing' AND locked_until<=UTC_TIMESTAMP())) ORDER BY id LIMIT 1",
+        [lockToken],
+      );
+      if (!claim.affectedRows) return;
+      const [rows] = await query(
+        "SELECT id,job_type,payload,attempts FROM background_jobs WHERE lock_token=? AND status='processing' LIMIT 1",
+        [lockToken],
+      );
+      claimedJob = rows[0];
+    }
     job = claimedJob;
     if (!job) throw new Error('CLAIMED_JOB_NOT_FOUND');
     leaseTimer = setInterval(
@@ -2068,6 +2120,7 @@ async function restoreDatabaseSnapshot(snapshot) {
     }
     for (const table of ['sessions', 'account_tokens', 'rate_limit_buckets', 'background_jobs'])
       await connection.query('DELETE FROM ??', [table]);
+    if (activeDatabaseType === 'sqlite') await connection.query('DELETE FROM txwiki_locks');
     await connection.commit();
     transaction = false;
   } catch (error) {
@@ -4691,7 +4744,7 @@ app.put('/api/admin/pages/:slug', auth, requirePermission('pages.create_edit'), 
         ? Object.fromEntries(Object.entries(content).map(([language, value]) => [language, clean(value)]))
         : {};
     await query(
-      'INSERT INTO pages (space_slug,category_id,slug,icon,page_type,redirect_url,titles,content,updated_by) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE category_id=VALUES(category_id),icon=VALUES(icon),page_type=VALUES(page_type),redirect_url=VALUES(redirect_url),titles=VALUES(titles),content=VALUES(content),updated_by=VALUES(updated_by)',
+      'INSERT INTO pages (space_slug,category_id,slug,icon,page_type,redirect_url,titles,content,updated_by) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE category_id=VALUES(category_id),icon=VALUES(icon),page_type=VALUES(page_type),redirect_url=VALUES(redirect_url),titles=VALUES(titles),content=VALUES(content),updated_by=VALUES(updated_by),updated_at=UTC_TIMESTAMP()',
       [
         space,
         categoryId,
