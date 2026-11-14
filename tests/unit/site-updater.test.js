@@ -156,6 +156,7 @@ test('updates admin status handles an empty update history and populated history
     ensureUpdateTables: async () => {},
     pool: { execute: async () => [[]] },
     updatePublicKey: require('../../scripts/update-public-key'),
+    systemVersion: () => '1.2.3',
     process: { env: {} },
     require: name => {
       if (name === './package.json') return { version: '1.2.3' };
@@ -285,6 +286,7 @@ test('one signed release package carries verified installer files and update fil
     await fs.promises.mkdir(path.join(projectRoot, 'update_zips'), { recursive: true });
     await fs.promises.mkdir(path.join(projectRoot, 'data'), { recursive: true });
     await fs.promises.writeFile(path.join(projectRoot, 'server.js'), 'module.exports = true;');
+    await fs.promises.writeFile(path.join(projectRoot, 'version.json'), '{"version":"1.0.1"}\n');
     await fs.promises.writeFile(path.join(projectRoot, 'schema.sqlite.sql'), 'CREATE TABLE pages (id INTEGER);');
     await fs.promises.writeFile(
       path.join(projectRoot, 'pterodactyl-start.js'),
@@ -311,6 +313,7 @@ test('one signed release package carries verified installer files and update fil
     const installationFiles = await collectInstallationFiles(projectRoot);
     assert.ok(installationFiles.includes('.env.example'));
     assert.ok(installationFiles.includes('server.js'));
+    assert.ok(installationFiles.includes('version.json'));
     assert.ok(!installationFiles.includes('.env'));
     assert.ok(!installationFiles.some(file => file.startsWith('update_zips/')));
     assert.ok(!installationFiles.some(file => file.startsWith('releases/')));
@@ -331,8 +334,10 @@ test('one signed release package carries verified installer files and update fil
     const pkg = await verifyUpdatePackage(packagePath, trustedPublicKey);
     assert.equal(pkg.version, '1.0.1');
     assert.ok(pkg.files.some(file => file.path === 'server.js'));
+    assert.ok(pkg.files.some(file => file.path === 'version.json'));
     assert.ok(pkg.files.some(file => file.path === 'pterodactyl-start.js'));
     assert.ok(pkg.installation.some(file => file.path === '.env.example'));
+    assert.ok(pkg.installation.some(file => file.path === 'version.json'));
     assert.ok(pkg.installation.some(file => file.path === 'schema.sqlite.sql'));
     assert.ok(pkg.installation.some(file => file.path === 'pterodactyl-start.js'));
     assert.ok(pkg.installation.some(file => file.path === 'scripts/default-theme/settings.json'));
@@ -356,6 +361,8 @@ test('one signed release package carries verified installer files and update fil
     assert.equal(safeInstallationPath('../outside.js'), false);
     assert.equal(safeInstallationPath('.env.example'), true);
     assert.equal(safeFilePath('pterodactyl-start.js'), true);
+    assert.equal(safeFilePath('version.json'), true);
+    assert.equal(safeFilePath('package.json'), false);
   });
 });
 

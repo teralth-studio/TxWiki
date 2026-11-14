@@ -46,6 +46,7 @@ const { migrateSitePermissions } = require('./scripts/role-permissions');
 const { createAdminAuditMiddleware } = require('./scripts/admin-audit-log');
 const { capturePageRevision } = require('./scripts/page-revisions');
 const { ARCHIVE_NAME: themeSourceArchiveName, ensureThemeSourceArchive } = require('./scripts/theme-source-package');
+const { systemVersion } = require('./scripts/system-version');
 const {
   DEFAULT_THEME,
   ThemeError,
@@ -3170,7 +3171,7 @@ app.get(
   requireAnyPermission(['backups.import', 'backups.export', 'backups.schedule']),
   async (req, res, next) => {
     try {
-      const [pendingBackups] = await query(
+      const pendingBackups = await query(
         "SELECT id FROM background_jobs WHERE job_type='backup' AND status IN ('queued','processing') LIMIT 1",
       );
       res
@@ -3201,10 +3202,10 @@ app.post(
   backupCreateLimiter,
   async (req, res, next) => {
     try {
-      const [pending] = await query(
+      const pending = await query(
         "SELECT id FROM background_jobs WHERE job_type='backup' AND status IN ('queued','processing') LIMIT 1",
       );
-      if (pending.length)
+      if (pending.length > 0)
         return res.status(409).json({ error: 'Ya hay una copia de seguridad en proceso.' });
       const queued = await enqueueJob('backup', null, 'manual-backup:' + crypto.randomUUID());
       if (!queued) return res.status(409).json({ error: 'No se pudo programar la copia de seguridad.' });
@@ -3222,7 +3223,7 @@ app.get('/api/admin/updates', auth, requirePermission('updates.install'), async 
     );
     res.set('Cache-Control', 'private, no-store').json({
       configured: Boolean(updatePublicKey),
-      currentVersion: rows[0]?.release_version || require('./package.json').version,
+      currentVersion: rows[0]?.release_version || systemVersion(),
       updates: rows,
     });
   } catch (error) {
@@ -3251,7 +3252,7 @@ app.get('/api/admin/updates/latest', auth, requirePermission('updates.install'),
     const [history] = await pool.query('SELECT release_version FROM wiki_updates');
     const currentVersion = history.reduce(
       (latest, row) => (compareVersions(row.release_version, latest) > 0 ? row.release_version : latest),
-      require('./package.json').version,
+      systemVersion(),
     );
     const release = await getOfficialRelease();
     const comparison = compareVersions(release.version, currentVersion);
@@ -3303,7 +3304,7 @@ async function validateUpdatePackage(req, res, next, file, expectedRelease = nul
     const [history] = await pool.query('SELECT release_version FROM wiki_updates');
     const priorVersion = history.reduce(
       (latest, row) => (compareVersions(row.release_version, latest) > 0 ? latest : row.release_version),
-      require('./package.json').version,
+      systemVersion(),
     );
     if (compareVersions(pkg.version, priorVersion) <= 0)
       throw new UpdateError('La versión debe ser superior a la ya instalada.', 409);
@@ -3386,7 +3387,7 @@ app.post(
       const [history] = await pool.query('SELECT release_version FROM wiki_updates');
       const currentVersion = history.reduce(
         (latest, row) => (compareVersions(row.release_version, latest) > 0 ? latest : row.release_version),
-        require('./package.json').version,
+        systemVersion(),
       );
       if (compareVersions(release.version, currentVersion) <= 0)
         throw new UpdateError('El sistema ya está en la versión más reciente.', 409);
@@ -3449,7 +3450,7 @@ app.post(
         root: __dirname,
         pool,
         createBackup,
-        installedVersion: require('./package.json').version,
+        installedVersion: systemVersion(),
         onProgress: (stage, progress) =>
           setUpdateMaintenance(stage, stage === 'preflight' ? 28 + Math.floor(((progress - 18) / 10) * 2) : progress),
         restart: async () => {

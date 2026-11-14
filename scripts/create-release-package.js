@@ -11,6 +11,7 @@ const includedRootFiles = new Set([
   '.gitignore',
   'themes/README.md',
   'themes/default.zip',
+  'version.json',
   'PTERODACTYL-INSTALL.txt',
   'launcher.js',
   'package-lock.json',

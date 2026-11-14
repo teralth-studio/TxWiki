@@ -80,6 +80,7 @@ function safeFilePath(value) {
     return false;
   return (
     value === 'server.js' ||
+    value === 'version.json' ||
     value === 'launcher.js' ||
     value === 'schema.sqlite.sql' ||
     value === 'pterodactyl-start.js' ||

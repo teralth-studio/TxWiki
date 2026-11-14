@@ -2,7 +2,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { obfuscate } = require('js-confuser');
 const { minify } = require('html-minifier-terser');
-const { transform } = require('lightningcss');
 const { prismBundle } = require('./prism-bundle');
 
 const publicRoot = path.join(__dirname, '..', 'public');
@@ -76,9 +75,7 @@ async function compiledAsset(file, type) {
           removeComments: true,
         });
       }
-      if (type === 'css') {
-        return transform({ filename: file, code: source, minify: true }).code.toString('utf8');
-      }
+      if (type === 'css') return source.toString('utf8');
       if (file === 'app.js') {
         const updatesSource = await fs.promises.readFile(path.join(publicRoot, 'admin-updates.js'), 'utf8');
         source = Buffer.from(composeAppScript(source.toString('utf8'), updatesSource));

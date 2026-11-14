@@ -1,6 +1,6 @@
 {
   "name": "teralth-wiki",
-  "version": "1.2.0",
+  "version": "1.6.5",
   "private": true,
   "description": "Configurable wiki with authentication, editing, and internationalization.",
   "main": "launcher.js",

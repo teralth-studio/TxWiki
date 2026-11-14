@@ -954,7 +954,8 @@ test('all public JavaScript is obfuscated and source files and maps are not serv
       assert.equal(response.status, 200);
       assert.match(response.headers.get('content-type'), /text\/css/);
       assert.equal(response.headers.get('cache-control'), 'no-cache');
-      assert.ok(Buffer.byteLength(body) < Buffer.byteLength(source), url);
+      assert.equal(body, source, url);
+      if (url === '/installer.css') assert.match(body, /\.installer-shell\s*\{/);
       assert.equal((await conditionalGet(origin + url, response.headers.get('etag'))).statusCode, 304);
       assert.equal(fs.readFileSync(path.join(__dirname, '..', '..', 'public', file), 'utf8'), source);
     }
@@ -973,6 +974,7 @@ test('all public JavaScript is obfuscated and source files and maps are not serv
       assert.match(response.headers.get('cache-control'), /no-store/);
       assert.ok(Buffer.byteLength(body) < Buffer.byteLength(source), url);
       assert.ok(body.includes(`src="${script}"`), url);
+      if (file === 'installer.html') assert.match(body, /href="\/installer\.css"/);
       assert.doesNotMatch(body, /(?:src|href)="[^"]*\?v=/);
       assert.equal(fs.readFileSync(path.join(__dirname, '..', '..', 'public', file), 'utf8'), source);
     }
