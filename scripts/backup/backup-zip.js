@@ -17,8 +17,12 @@ function validateThemeArchivePath(archivePath) {
   const index = archivePath.lastIndexOf(marker);
   if (index < 0) return;
   const themePath = archivePath.slice(index + marker.length);
-  if (!/^(?!default\/)[a-z0-9][a-z0-9_-]{0,47}\/(?:settings\.json|theme\.css|preview\.png|assets\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|avif|woff2?|ttf|otf))$/.test(themePath))
-    throw new Error('BACKUP_THEME_PATH_INVALID');
+  if (!/^(?!default\/)[a-z0-9][a-z0-9_-]{0,47}\/(?:settings\.json|theme\.css|preview\.png|assets\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|avif|woff2?|ttf|otf))$/.test(themePath)) {
+    const safePath = themePath.replace(/[\u0000-\u001f\u007f]/g, '?').slice(0, 240);
+    const error = new Error(`BACKUP_THEME_PATH_INVALID: ${safePath}`);
+    error.code = 'BACKUP_THEME_PATH_INVALID';
+    throw error;
+  }
 }
 
 async function addSource(zip, source, archivePath) {

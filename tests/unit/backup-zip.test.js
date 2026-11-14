@@ -86,3 +86,22 @@ test('legacy backup migration skips the bundled Default theme under an archive p
     'legacy-backup/application/themes/custom/theme.css',
   ]);
 });
+
+test('backup errors identify unsupported files inside a custom theme', async (t) => {
+  const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'txwiki-invalid-theme-backup-'));
+  t.after(() => fs.promises.rm(directory, { recursive: true, force: true }));
+  const themeDirectory = path.join(directory, 'themes', 'custom');
+  await fs.promises.mkdir(themeDirectory, { recursive: true });
+  await fs.promises.writeFile(path.join(themeDirectory, 'README.md'), 'unsupported theme file');
+
+  await assert.rejects(
+    createBackupZipStreamFromSources(
+      'fixture',
+      [{ source: path.join(directory, 'themes'), archivePath: 'application/themes' }],
+      Buffer.from('encrypted-database'),
+    ),
+    (error) =>
+      error.code === 'BACKUP_THEME_PATH_INVALID' &&
+      error.message === 'BACKUP_THEME_PATH_INVALID: custom/README.md',
+  );
+});
