@@ -35,7 +35,8 @@ function safeSourcePath(value) {
         /^(?:update_zips|updates_zip|releases|node_modules|data)$/i.test(part) ||
         (index === 0 && /^backup$/i.test(part)) ||
         (/^\.env(?:$|[.-])/i.test(part) && !/^\.env\.example$/i.test(part)) ||
-        /\.(?:pem|key|sqlite)(?:$|[-.])/i.test(part),
+        (/\.(?:pem|key|sqlite)(?:$|[-.])/i.test(part) &&
+          !(index === 0 && part === 'schema.sqlite.sql')),
     )
   );
 }

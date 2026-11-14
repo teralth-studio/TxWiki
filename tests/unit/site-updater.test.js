@@ -285,6 +285,7 @@ test('one signed release package carries verified installer files and update fil
     await fs.promises.mkdir(path.join(projectRoot, 'update_zips'), { recursive: true });
     await fs.promises.mkdir(path.join(projectRoot, 'data'), { recursive: true });
     await fs.promises.writeFile(path.join(projectRoot, 'server.js'), 'module.exports = true;');
+    await fs.promises.writeFile(path.join(projectRoot, 'schema.sqlite.sql'), 'CREATE TABLE pages (id INTEGER);');
     await fs.promises.writeFile(
       path.join(projectRoot, 'pterodactyl-start.js'),
       "process.stdout.write('start');",
@@ -332,6 +333,7 @@ test('one signed release package carries verified installer files and update fil
     assert.ok(pkg.files.some(file => file.path === 'server.js'));
     assert.ok(pkg.files.some(file => file.path === 'pterodactyl-start.js'));
     assert.ok(pkg.installation.some(file => file.path === '.env.example'));
+    assert.ok(pkg.installation.some(file => file.path === 'schema.sqlite.sql'));
     assert.ok(pkg.installation.some(file => file.path === 'pterodactyl-start.js'));
     assert.ok(pkg.installation.some(file => file.path === 'scripts/default-theme/settings.json'));
     assert.ok(pkg.installation.some(file => file.path === 'scripts/default-theme/theme.css'));
