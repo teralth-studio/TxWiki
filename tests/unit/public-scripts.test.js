@@ -45,7 +45,7 @@ test('application bundle initializes the updates module before the app code', ()
   assert.equal(context.window.appSawUpdates, 'function');
 });
 
-test('served obfuscated app bundle exposes the updates renderer', async () => {
+test('served obfuscated app bundle leaves the admin updates renderer lazy-loaded', async () => {
   const app = express();
   app.use(publicScripts);
   const server = await new Promise(resolve => {
@@ -102,7 +102,7 @@ test('served obfuscated app bundle exposes the updates renderer', async () => {
     } catch {
       // The app expects the full browser DOM; the update module is initialized before app startup.
     }
-    assert.equal(typeof context.window.TeralthAdminUpdates?.render, 'function');
+    assert.equal(typeof context.window.TeralthAdminUpdates?.render, 'undefined');
   } finally {
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
@@ -346,7 +346,7 @@ test('update admin page validates the selected package before opening maintenanc
         classList: { toggle() {} },
         querySelector(innerSelector) {
           if (innerSelector === 'small') return { textContent: '' };
-          return { setAttribute() {}, firstElementChild: { style: {} } };
+          return { setAttribute() {}, firstElementChild: { style: { setProperty() {} } } };
         },
       };
       return getElement(selector);
@@ -639,7 +639,7 @@ test('initial application HTML exposes the configured site title to crawlers', a
   const html = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf8');
   const source = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
   const start = source.indexOf('const escapeHeadValue =');
-  const end = source.indexOf("\napp.get(['/login'", start);
+  const end = source.indexOf("\napp.get('/robots.txt'", start);
   assert.ok(start >= 0 && end > start);
   let transform;
   vm.runInNewContext(source.slice(start, end), {
@@ -647,7 +647,7 @@ test('initial application HTML exposes the configured site title to crawlers', a
     query: async () => [{ setting_value: { pageTitle: 'Example Wiki' } }],
     json: value => value, process,
   });
-  const result = await transform(html, { path: '/admin' });
+  const { html: result } = await transform(html, { path: '/admin' });
   assert.match(result, /<title>Example Wiki<\/title>/);
   assert.match(result, /<meta name="application-name" content="Example Wiki">/);
   assert.match(result, /<meta property="og:title" content="Example Wiki">/);
@@ -658,7 +658,7 @@ test('SEO metadata is escaped and canonical URLs follow the requested page', asy
     const html = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf8');
     const source = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
     const start = source.indexOf('const escapeHeadValue =');
-    const end = source.indexOf("\napp.get(['/login'", start);
+    const end = source.indexOf("\napp.get('/robots.txt'", start);
     let transform;
     const site = {
       name: 'Site & Wiki',
@@ -671,20 +671,26 @@ test('SEO metadata is escaped and canonical URLs follow the requested page', asy
     };
     vm.runInNewContext(source.slice(start, end), {
       sendPublicHtml: (name, callback) => { transform = callback; },
-      query: async () => [{ setting_value: site }], json: value => value, process, URL,
+      query: async sql => {
+        if (sql.includes('FROM settings')) return [{ setting_value: site }];
+        if (sql.includes('FROM spaces')) return [{ slug: 'main', home_page_slug: 'home' }];
+        if (sql.includes('FROM pages')) return [{ page_type: 'content', titles: { en: 'Guide & basics' }, content: {} }];
+        throw new Error(`Unexpected query: ${sql}`);
+      },
+      json: value => value, safePageContent: () => ({}), process, URL,
     });
-    const result = await transform(html, { path: '/guide' });
+    const { html: result } = await transform(html, { path: '/guide' });
     assert.match(result, /name="application-name" content="Site &amp; Wiki"/);
-    assert.match(result, /<title>Site &amp; Wiki<\/title>/);
-    assert.match(result, /property="og:title" content="Shared &amp; title"/);
+    assert.match(result, /<title>Guide &amp; basics \| Site &amp; Wiki<\/title>/);
+    assert.match(result, /property="og:title" content="Guide &amp; basics \| Site &amp; Wiki"/);
     assert.match(result, /name="description" content="Useful &quot;docs&quot; &lt;here&gt;"/);
     assert.match(result, /property="og:image" content="https:\/\/example.test\/media\/abcdefghijklmnop.webp"/);
     assert.match(result, /rel="canonical" href="https:\/\/example.test\/docs\/guide"/);
-    const privatePage = await transform(html, { path: '/admin' });
+    const { html: privatePage } = await transform(html, { path: '/admin' });
     assert.match(privatePage, /name="robots" content="noindex, nofollow"/);
     assert.doesNotMatch(privatePage, /rel="canonical"/);
     site.seo.indexable = false;
-    assert.match(await transform(html, { path: '/' }), /name="robots" content="noindex, nofollow"/);
+    assert.match((await transform(html, { path: '/' })).html, /name="robots" content="noindex, nofollow"/);
 });
 
 test('registered user rows show role by name and localized verification badges', () => {
@@ -954,7 +960,8 @@ test('all public JavaScript is obfuscated and source files and maps are not serv
       assert.equal(response.status, 200);
       assert.match(response.headers.get('content-type'), /text\/css/);
       assert.equal(response.headers.get('cache-control'), 'no-cache');
-      assert.equal(body, source, url);
+      assert.ok(body.length > 0, url);
+      if (url === '/styles.css') assert.ok(Buffer.byteLength(body) < Buffer.byteLength(source), url);
       if (url === '/installer.css') assert.match(body, /\.installer-shell\s*\{/);
       assert.equal((await conditionalGet(origin + url, response.headers.get('etag'))).statusCode, 304);
       assert.equal(fs.readFileSync(path.join(__dirname, '..', '..', 'public', file), 'utf8'), source);

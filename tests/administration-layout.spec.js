@@ -242,11 +242,11 @@ for (const width of [1440, 390]) {
 
 }
 
-test('admin section URL opens the requested tab and keeps its space', async ({ page }) => {
+test('admin section URL opens the requested tab without a main-space query', async ({ page }) => {
   await page.route('**/api/admin/users', route => route.fulfill({ json: { users: [], roles: [] } }));
-  await page.goto(`${origin}/admin/users?space=main`);
+  await page.goto(`${origin}/admin/users`);
   await expect(page.locator('#adminNavigation [data-tab="users"]')).toHaveAttribute('aria-current', 'page');
-  await expect(page).toHaveURL(/\/admin\/users\?space=main$/);
+  await expect(page).toHaveURL(/\/admin\/users$/);
 });
 
 test('activity logs search only on click and paginate ten records at a time', async ({ page }) => {

@@ -1,3 +1,4 @@
+const pageLoadStartedAt = performance.now();
 const $ = (selector, root = document) => root.querySelector(selector);
 document.addEventListener('click', async (event) => {
   const copy = event.target.closest('.code-copy-button');
@@ -36,6 +37,8 @@ let loadingDepth = 0,
   searchMatches = [],
   searchSelection = -1;
 let sweetAlertLoadPromise = null;
+let prismLoadPromise = null,
+  initialLoadSeconds = null;
 function themedSweetAlertArgs(args) {
   const [options, ...rest] = args;
   if (!options || typeof options !== 'object' || Array.isArray(options)) return args;
@@ -386,6 +389,8 @@ const pathParts = () => {
 const adminTabKeys = ['pages', 'categories', 'header-links', 'settings', 'spaces', 'languages', 'users', 'roles', 'proxy', 'smtp', 'backups', 'captcha', 'logs', 'themes', 'updates'];
 function adminUrl(tab = 'pages', space = state.space) {
   const section = adminTabKeys.includes(tab) ? tab : 'pages';
+  if ((space || 'main') === 'main')
+    return `/admin/${section}${['pages', 'categories'].includes(section) ? '?space=main' : ''}`;
   return `/admin/${section}?space=${encodeURIComponent(space || 'main')}`;
 }
 function route() {
@@ -395,6 +400,13 @@ function route() {
   if (p[0] === 'admin') {
     const requested = new URLSearchParams(location.search).get('space') || 'main',
       match = spaces.find((item) => item.slug.toLowerCase() === requested.toLowerCase());
+    if (requested === 'main' && !['pages', 'categories'].includes(p[1])) {
+      const currentUrl = new URL(location.href);
+      if (currentUrl.searchParams.get('space') === 'main') {
+        currentUrl.searchParams.delete('space');
+        history.replaceState(history.state, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
+      }
+    }
     return {
       page: 'admin',
       space: match?.slug || 'main',
@@ -778,8 +790,8 @@ function notify(options) {
     toast: true,
     position: 'top-end',
     showConfirmButton: false,
-    timer: options.timer ?? 2600,
-    timerProgressBar: true,
+    timer: 2000,
+    timerProgressBar: false,
     width: 'min(420px, calc(100vw - 24px))',
     customClass: { ...(options.customClass || {}), popup },
   });
@@ -1820,7 +1832,7 @@ function watchTocHeadings(heads, toc, scrollTarget = window) {
 function renderToc() {
   const toc = $('#tocLinks'),
     title = $('#tocTitle');
-  if (title) title.textContent = t('En esta página', 'On this page');
+  if (title) title.textContent = t('Secciones', 'Sections');
   const heads = $$('#article h1,#article h2,#article h3');
   toc.innerHTML = buildTocTree(heads, 'section');
   $$('a[data-toc-index]', toc).forEach((link) => {
@@ -1840,7 +1852,7 @@ function renderEditorToc(content) {
   if (lastEdited) lastEdited.hidden = true;
   const toc = $('#tocLinks'),
     title = $('#tocTitle');
-  if (title) title.textContent = t('En esta página', 'On this page');
+  if (title) title.textContent = t('Secciones', 'Sections');
   toc.setAttribute('data-empty-label', t('Añade encabezados para crear el índice.', 'Add headings to create an outline.'));
   const heads = $$('h1,h2,h3', content);
   toc.innerHTML = buildTocTree(heads, 'edit-section');
@@ -5633,11 +5645,34 @@ function highlightCodeBlock(block) {
     grammar = language === 'env' ? 'bash' : language;
   code.textContent = source;
   if (language === 'text' || source.length > 200000) return;
-  if (!prism || !prism.languages[grammar]) {
+  if (!prism) {
+    ensurePrismLoaded()
+      .then(() => highlightCodeBlock(block))
+      .catch((error) => console.error('[Teralth Wiki] Code syntax highlighter unavailable:', error));
+    return;
+  }
+  if (!prism.languages[grammar]) {
     console.error('[Teralth Wiki] Code syntax highlighter unavailable for language:', language);
     return;
   }
   code.innerHTML = prism.highlight(source, prism.languages[grammar], grammar);
+}
+function ensurePrismLoaded() {
+  if (window.Prism) return Promise.resolve(window.Prism);
+  if (!prismLoadPromise) {
+    prismLoadPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = '/vendor/prism/prism.js';
+      script.async = true;
+      script.onload = () => window.Prism ? resolve(window.Prism) : reject(new Error('Prism did not initialize.'));
+      script.onerror = () => reject(new Error('Prism could not be loaded.'));
+      document.head.append(script);
+    }).catch((error) => {
+      prismLoadPromise = null;
+      throw error;
+    });
+  }
+  return prismLoadPromise;
 }
 function codeBlockText(code) {
   const read = (node) => {
@@ -7411,30 +7446,20 @@ async function categoriesTab(root) {
     Object.values(c.names)[0] ||
     t('Categoría', 'Category');
   root.innerHTML = `<section class="admin-section workspace-selector-section"><div><h2>${t('Espacio de trabajo', 'Working space')}</h2><p>${t('Elige el espacio cuyas categorías quieres administrar.', 'Choose the space whose categories you want to manage.')}</p></div><label class="workspace-select-label"><span class="admin-label">${t('Espacio de documentación', 'Documentation space')}</span><select class="settings-input" id="categoriesSpaceSelect">${spaceOptions}</select></label></section><section class="admin-section category-manager-section"><div class="section-heading"><div><h2>${t('Categorías de navegación', 'Navigation categories')}</h2><p>${t('Organiza las secciones de este espacio. Arrastra para cambiar el orden.', 'Organize this space. Drag categories to change their order.')}</p></div><span class="category-count">${state.categories.length}</span></div><div id="categoryRows" class="category-rows">${state.categories.map((category, index) => `<div class="category-row" draggable="true" data-category-id="${category.id}"><button type="button" class="drag-handle" aria-label="${t('Arrastrar categoría', 'Drag category')}" title="${t('Arrastrar para ordenar', 'Drag to reorder')}"><i class="fa-solid fa-grip-vertical"></i></button><span class="category-order">${String(index + 1).padStart(2, '0')}</span><span class="category-icon-preview">${pageIconMarkup(category.icon)}</span><strong>${esc(categoryLabel(category))}</strong><span class="category-parent-label">${category.parent_id ? esc(categoryLabel(state.categories.find((item) => Number(item.id) === Number(category.parent_id)) || { names: {} })) : t('Principal', 'Root')}</span><button class="icon-button edit-category" data-id="${category.id}" title="${t('Editar', 'Edit')}"><i class="fa-solid fa-pen"></i></button><button class="icon-button remove-category" data-id="${category.id}" title="${t('Eliminar', 'Delete')}"><i class="fa-solid fa-trash"></i></button></div>`).join('') || `<div class="empty-state">${t('Todavía no hay categorías.', 'No categories yet.')}</div>`}</div><div class="category-create-panel"><h3>${t('Añadir categoría', 'Add category')}</h3><div class="category-name-editor"><label><span class="admin-label">${t('Idioma', 'Language')}</span><select class="settings-input" id="newCategoryLanguage">${languageOptions}</select></label><label><span class="admin-label">${t('Nombre de categoría', 'Category name')}</span><input class="settings-input" id="newCategoryName" maxlength="120" placeholder="${t('Por ejemplo: Guía', 'For example: Guide')}"></label></div><div class="category-fields-grid"><label><span class="admin-label">${t('Tipo de marca', 'Brand type')}</span><select id="categoryMarkMode" class="settings-input"><option value="icon">${t('Insertar un ícono', 'Insert an icon')}</option><option value="image">${t('Subir una imagen', 'Upload an image')}</option></select></label><label id="categoryIconWrap"><span class="admin-label">${t('Ícono Font Awesome', 'Font Awesome icon')}</span><input id="categoryIcon" class="settings-input" value="fa-solid fa-folder" placeholder="fa-solid fa-folder"></label><label id="categoryImageWrap" hidden><span class="admin-label">${t('Subir una imagen', 'Upload an image')}</span><input id="categoryImageFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp"><input id="categoryImagePath" type="hidden"><small id="categoryImageStatus">${t('No hay imagen subida', 'No image uploaded')}</small></label><label><span class="admin-label">${t('Categoría principal', 'Parent category')}</span><select id="categoryParent" class="settings-input"><option value="">${t('Ninguna', 'None')}</option>${state.categories.map((category) => `<option value="${category.id}">${esc(categoryLabel(category))}</option>`).join('')}</select></label></div><label class="category-open-default"><input id="categoryOpen" type="checkbox" checked> ${t('Mantener abierta la subcategoría al ingresar a la página', 'Keep the subcategory expanded when opening the page')}</label><button class="primary-button" id="createCategory"><i class="fa-solid fa-plus"></i> ${t('Crear categoría', 'Create category')}</button></div></section>`;
-  const categoryCreatePanel = $('.category-create-panel', root),
-    categoryError = document.createElement('div');
-  categoryError.className = 'category-create-error';
-  categoryError.setAttribute('role', 'alert');
-  categoryError.setAttribute('aria-live', 'assertive');
-  categoryError.hidden = true;
-  $('h3', categoryCreatePanel).after(categoryError);
-  const clearCategoryError = () => {
-    categoryError.textContent = '';
-    categoryError.hidden = true;
-  };
-  const showCategoryError = (error) => {
-    if (!isUserError(error)) {
-      showCouldNotStart(error, 'category-editor', { path: 'category-create' });
-      return;
-    }
-    categoryError.textContent = userErrorText(error);
-    categoryError.hidden = false;
-  };
-  const showCategoryValidation = (message) => {
-    categoryError.textContent = message;
-    categoryError.hidden = false;
-  };
-  if (!can('categories.create_edit')) $('.category-create-panel', root).hidden = true;
+  const categoryCreatePanel = $('.category-create-panel', root);
+  categoryCreatePanel.classList.add('category-create-dialog');
+  const categoryCreateMarkup = categoryCreatePanel.outerHTML;
+  categoryCreatePanel.remove();
+  const addCategoryButton = document.createElement('button');
+  addCategoryButton.type = 'button';
+  addCategoryButton.className = 'primary-button category-add-button';
+  addCategoryButton.innerHTML = '<i class="fa-solid fa-plus" aria-hidden="true"></i> ' + t('Añadir categoría', 'Add category');
+  const categoryHeading = $('.section-heading', root),
+    categoryHeadingActions = document.createElement('div');
+  categoryHeadingActions.className = 'category-heading-actions';
+  categoryHeadingActions.append($('.category-count', categoryHeading), addCategoryButton);
+  categoryHeading.append(categoryHeadingActions);
+  if (!can('categories.create_edit')) addCategoryButton.hidden = true;
   if (!can('categories.create_edit')) $$('.edit-category', root).forEach((button) => (button.hidden = true));
   if (!can('categories.create_edit'))
     $$('.category-row', root).forEach((row) => {
@@ -7449,94 +7474,123 @@ async function categoriesTab(root) {
     }
     await changeAdminSpace(event.target.value, 'categories', root);
   };
-  let draftNames = {};
-  const language = $('#newCategoryLanguage', root),
-    name = $('#newCategoryName', root);
-  language.dataset.current = language.value;
-  language.onchange = () => {
-    draftNames[language.dataset.current] = name.value.trim();
-    language.dataset.current = language.value;
-    name.value = draftNames[language.value] || '';
-    clearCategoryError();
-  };
-  name.addEventListener('input', clearCategoryError);
-  $('#categoryMarkMode', root).onchange = () => {
-    const image = $('#categoryMarkMode', root).value === 'image';
-    $('#categoryIconWrap', root).hidden = image;
-    $('#categoryImageWrap', root).hidden = !image;
-    clearCategoryError();
-  };
-  $('#categoryParent', root).addEventListener('change', clearCategoryError);
-  $('#categoryImageFile', root).onchange = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const status = $('#categoryImageStatus', root);
-    try {
-      status.textContent = t('Subiendo imagen…', 'Uploading image…');
-      const body = new FormData();
-      body.append('image', file);
-      body.append('alt', $('#newCategoryName', root).value.trim());
-      const response = await request('/api/admin/uploads', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'X-Wiki-Space': state.space, 'X-CSRF-Token': state.csrf },
-        body,
-      });
-      const data = await imageUploadResponse(response);
-      $('#categoryImagePath', root).value = data.url;
-      status.innerHTML =
-        '<img class="category-image-preview" src="' +
-        esc(data.url) +
-        '" alt=""><a href="' +
-        esc(data.url) +
-        '" target="_blank" rel="noopener noreferrer">' +
-        esc(data.url) +
-        '</a>';
-      setNotice(
-        t(
-          'Imagen subida. Guarda la categoría para aplicarla.',
-          'Image uploaded. Save the category to apply it.',
-        ),
-      );
-    } catch (error) {
-      status.textContent = '';
-      showCategoryError(error);
-    } finally {
-      event.target.value = '';
-    }
-  };
-  $('#createCategory', root).onclick = async () => {
-    try {
-      draftNames[language.value] = name.value.trim();
-      if ($('#categoryMarkMode', root).value === 'image' && !$('#categoryImagePath', root).value)
-        return showCategoryValidation(t('Selecciona un archivo de imagen.', 'Select an image file.'));
-      if (langs.some((lang) => !draftNames[lang])) {
-        showCategoryValidation(
-          t(
-            'Completa el nombre de la categoría en todos los idiomas activos.',
-            'Enter the category name in every active language.',
-          ),
-        );
-        return;
-      }
-      clearCategoryError();
-      await api('/api/admin/categories', {
-        method: 'POST',
-        body: JSON.stringify({
-          names: draftNames,
-          icon:
-            $('#categoryMarkMode', root).value === 'image'
-              ? $('#categoryImagePath', root).value
-              : $('#categoryIcon', root).value,
-          parentId: $('#categoryParent', root).value || null,
-          isOpen: $('#categoryOpen', root).checked,
-        }),
-      });
-      await loadWiki();
-      await adminView('categories');
-    } catch (e) {
-      showCategoryError(e);
-    }
+  addCategoryButton.onclick = async () => {
+    let draftNames = {};
+    await Swal.fire({
+      title: t('Añadir categoría', 'Add category'),
+      html: categoryCreateMarkup,
+      showCancelButton: true,
+      showConfirmButton: false,
+      cancelButtonText: t('Cancelar', 'Cancel'),
+      buttonsStyling: false,
+      customClass: {
+        popup: 'wiki-swal-popup category-create-popup',
+        title: 'wiki-swal-title',
+        htmlContainer: 'wiki-swal-body',
+        cancelButton: 'secondary-button',
+      },
+      focusConfirm: false,
+      didOpen: () => {
+        const form = Swal.getHtmlContainer(),
+          field = (selector) => $(selector, form),
+          language = field('#newCategoryLanguage'),
+          name = field('#newCategoryName');
+        const categoryError = document.createElement('div');
+        categoryError.className = 'category-create-error';
+        categoryError.setAttribute('role', 'alert');
+        categoryError.setAttribute('aria-live', 'assertive');
+        categoryError.hidden = true;
+        $('h3', form).after(categoryError);
+        const clearCategoryError = () => {
+          categoryError.textContent = '';
+          categoryError.hidden = true;
+        };
+        const showCategoryError = (error) => {
+          if (!isUserError(error)) {
+            showCouldNotStart(error, 'category-editor', { path: 'category-create' });
+            return;
+          }
+          categoryError.textContent = userErrorText(error);
+          categoryError.hidden = false;
+        };
+        const showCategoryValidation = (message) => {
+          categoryError.textContent = message;
+          categoryError.hidden = false;
+        };
+        language.dataset.current = language.value;
+        language.onchange = () => {
+          draftNames[language.dataset.current] = name.value.trim();
+          language.dataset.current = language.value;
+          name.value = draftNames[language.value] || '';
+          clearCategoryError();
+        };
+        name.addEventListener('input', clearCategoryError);
+        field('#categoryMarkMode').onchange = () => {
+          const image = field('#categoryMarkMode').value === 'image';
+          field('#categoryIconWrap').hidden = image;
+          field('#categoryImageWrap').hidden = !image;
+          clearCategoryError();
+        };
+        field('#categoryParent').addEventListener('change', clearCategoryError);
+        field('#categoryImageFile').onchange = async (event) => {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          const status = field('#categoryImageStatus');
+          try {
+            status.textContent = t('Subiendo imagen…', 'Uploading image…');
+            const body = new FormData();
+            body.append('image', file);
+            body.append('alt', name.value.trim());
+            const response = await request('/api/admin/uploads', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'X-Wiki-Space': state.space, 'X-CSRF-Token': state.csrf },
+              body,
+            });
+            const data = await imageUploadResponse(response);
+            field('#categoryImagePath').value = data.url;
+            status.innerHTML =
+              '<img class="category-image-preview" src="' +
+              esc(data.url) +
+              '" alt=""><a href="' +
+              esc(data.url) +
+              '" target="_blank" rel="noopener noreferrer">' +
+              esc(data.url) +
+              '</a>';
+            setNotice(t('Imagen subida. Guarda la categoría para aplicarla.', 'Image uploaded. Save the category to apply it.'));
+          } catch (error) {
+            status.textContent = '';
+            showCategoryError(error);
+          } finally {
+            event.target.value = '';
+          }
+        };
+        $('#createCategory', form).onclick = async () => {
+          try {
+            draftNames[language.value] = name.value.trim();
+            if (field('#categoryMarkMode').value === 'image' && !field('#categoryImagePath').value)
+              return showCategoryValidation(t('Selecciona un archivo de imagen.', 'Select an image file.'));
+            if (langs.some((lang) => !draftNames[lang]))
+              return showCategoryValidation(t('Completa el nombre de la categoría en todos los idiomas activos.', 'Enter the category name in every active language.'));
+            clearCategoryError();
+            await api('/api/admin/categories', {
+              method: 'POST',
+              body: JSON.stringify({
+                names: draftNames,
+                icon: field('#categoryMarkMode').value === 'image' ? field('#categoryImagePath').value : field('#categoryIcon').value,
+                parentId: field('#categoryParent').value || null,
+                isOpen: field('#categoryOpen').checked,
+              }),
+            });
+            Swal.close();
+            await loadWiki();
+            await adminView('categories');
+          } catch (error) {
+            showCategoryError(error);
+          }
+        };
+      },
+    });
   };
   $$('.edit-category', root).forEach(
     (button) =>
@@ -7760,6 +7814,13 @@ function updateBrowserTitle(context) {
   const socialTitle = document.querySelector('meta[property="og:title"]');
   if (socialTitle) socialTitle.content = `${context} | ${siteTitle}`;
 }
+function renderFooterCopyright() {
+  if (!state.config) return;
+  const copyright = `© ${new Date().getFullYear()} ${state.config.site.name}`;
+  $('#footerCopyright').textContent = initialLoadSeconds === null
+    ? copyright
+    : `${copyright} · Site loaded in ${initialLoadSeconds.toFixed(2)}s`;
+}
 function updateBrand() {
   const pageTitle = String(state.config.site.name || state.config.site.pageTitle || 'Teralth Wiki').trim(),
     isAdmin = route().page === 'admin',
@@ -7774,7 +7835,7 @@ function updateBrand() {
     favicon.href = state.config.site.favicon || '/assets/favicon.svg';
     favicon.type = favicon.href.startsWith('/media/') ? 'image/webp' : 'image/svg+xml';
   }
-  $('#footerCopyright').textContent = `© ${new Date().getFullYear()} ${state.config.site.name} · ${tr('footer.rights', t('Todos los derechos reservados.', 'All rights reserved.'))}`;
+  renderFooterCopyright();
   $('#footerContent').textContent = String(state.config.site.sidebarLabel || t('Documentación', 'Documentation'));
   $('#brand .brand-name').textContent = state.config.site.name;
   $('#mobileDocsBrand .mobile-docs-name').textContent = state.config.site.name;
@@ -8059,6 +8120,8 @@ window.addEventListener('beforeunload', (e) => {
 renderCookieNotice();
 showLoading();
 boot().finally(() => {
+  initialLoadSeconds = Math.max(0, (performance.now() - pageLoadStartedAt) / 1000);
+  renderFooterCopyright();
   loadingDepth = 0;
   hideLoading();
 });

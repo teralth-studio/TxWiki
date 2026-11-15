@@ -516,7 +516,7 @@ async function runUpdate({
               hasSeenActiveUpdate = true;
               showProgress(status.progress, status.stage, status.phase, status.phaseProgress);
             } else if (hasSeenActiveUpdate) {
-              window.location.assign('/admin/updates?space=main');
+              window.location.assign('/admin/updates');
               return;
             }
           } catch {
@@ -707,7 +707,7 @@ if (typeof document !== 'undefined' && typeof document.getElementById === 'funct
       showError,
       csrf,
       canManageBackups,
-      navigate: (tab) => location.assign(`/admin/${tab}?space=main`),
+      navigate: (tab) => location.assign(`/admin/${tab}${['pages', 'categories'].includes(tab) ? '?space=main' : ''}`),
       autoStart: transfer ? { automatic: transfer.automatic, file: transfer.file } : null,
     });
   })().catch((error) => showError(root, error));

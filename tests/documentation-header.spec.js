@@ -246,11 +246,11 @@ test('documentation spaces has its own admin section, separate from general sett
   await expect(page).toHaveURL(/\/admin\/pages\?space=main$/);
   await expect(page.locator('#adminNavigation')).toBeVisible();
   await page.locator('#adminNavigation [data-tab="spaces"]').click();
-  await expect(page).toHaveURL(/\/admin\/spaces\?space=main$/);
+  await expect(page).toHaveURL(/\/admin\/spaces$/);
   await expect(page.locator('#spaceRows')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Documentation spaces' })).toBeVisible();
   await page.locator('#adminNavigation [data-tab="settings"]').click();
-  await expect(page).toHaveURL(/\/admin\/settings\?space=main$/);
+  await expect(page).toHaveURL(/\/admin\/settings$/);
   await expect(page.locator('#spaceRows')).toHaveCount(0);
   await expect(page.locator('#saveSettings')).toBeVisible();
 });

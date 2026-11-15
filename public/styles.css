@@ -1806,6 +1806,159 @@ a:hover {
     font-size: 11px;
   }
 }
+
+/* Category creation lives in a theme-aware dialog beside the list count. */
+.category-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.category-add-button {
+  min-height: 36px;
+  padding: 7px 12px;
+  white-space: nowrap;
+}
+.category-create-popup.swal2-popup {
+  width: min(680px, calc(100vw - 28px)) !important;
+}
+.category-create-popup .category-create-dialog {
+  width: 100%;
+  margin: 0;
+  padding: 16px;
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: none;
+  text-align: left;
+}
+.category-create-popup .category-create-dialog > h3 {
+  display: none;
+}
+.category-create-popup .category-create-dialog .category-name-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.35fr);
+  gap: 11px;
+}
+.category-create-popup .category-create-dialog .category-fields-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.category-create-popup .category-create-dialog .admin-label {
+  color: var(--muted);
+}
+@media (max-width: 600px) {
+  .category-create-popup .category-create-dialog .category-name-editor,
+  .category-create-popup .category-create-dialog .category-fields-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .category-create-popup .category-create-dialog {
+    padding: 12px;
+  }
+  .category-heading-actions {
+    gap: 7px;
+  }
+  .category-add-button {
+    min-height: 34px;
+    padding: 6px 9px;
+  }
+}
+
+/* Page editor: keep the writing surface and live heading outline side by side. */
+body.admin-mode.editor-mode .shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+body.admin-mode.editor-mode .reading-layout {
+  display: grid;
+  grid-column: 1;
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
+  grid-template-rows: minmax(0, 1fr);
+  height: 100dvh;
+  min-height: 0;
+  align-items: start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+body.admin-mode.editor-mode .main-column {
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 100dvh;
+  padding-top: 12px;
+}
+body.admin-mode.editor-mode .admin-panel {
+  width: 100%;
+  max-width: none;
+  padding: 24px 28px 40px;
+}
+body.admin-mode.editor-mode .toc {
+  position: sticky;
+  top: 18px;
+  grid-column: 2;
+  grid-row: 1;
+  width: 100%;
+  height: calc(100dvh - 36px);
+  min-width: 0;
+  padding: 22px 18px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-left: 1px solid var(--line-soft);
+  background: transparent;
+}
+body.admin-mode.editor-mode .toc-inner {
+  width: 100%;
+  max-width: none;
+  padding: 0;
+}
+body.admin-mode.editor-mode .toc-inner h2 {
+  margin-bottom: 14px;
+  color: var(--text);
+  font-size: 13px;
+}
+body.admin-mode.editor-mode .toc-tree-row a {
+  display: block;
+  padding: 5px 0;
+  color: var(--muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+body.admin-mode.editor-mode .toc-tree-row a:hover,
+body.admin-mode.editor-mode .toc-tree-row a:focus-visible {
+  color: var(--text);
+}
+body.admin-mode.editor-mode .editor-page-header {
+  margin-bottom: 22px;
+}
+@media (max-width: 940px) {
+  body.admin-mode.editor-mode .shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  body.admin-mode.editor-mode .reading-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+  }
+  body.admin-mode.editor-mode .toc {
+    position: relative;
+    top: auto;
+    grid-column: 1;
+    grid-row: 2;
+    height: auto;
+    max-height: 300px;
+    margin: 0 22px 28px;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+  }
+}
+@media (max-width: 680px) {
+  body.admin-mode.editor-mode .admin-panel {
+    padding: 20px 16px 28px;
+  }
+  body.admin-mode.editor-mode .toc {
+    margin: 0 16px 20px;
+  }
+}
 @media (max-width: 430px) {
   .main-column {
     padding: 0 11px;
@@ -7153,19 +7306,23 @@ button[aria-busy='true'] {
 /* Administration uses the same reading surface as the documentation. */
 .admin-mode .shell {
   position: relative;
-  background: #121212;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  background: var(--sidebar);
 }
 .admin-mode .shell::before {
   content: '';
   position: absolute;
   inset: 8px 8px 8px calc(var(--sidebar-width) + 8px);
-  border: 1px solid #252525;
+  border: 1px solid var(--line-soft);
   border-radius: 14px;
-  background: #101010;
+  background: var(--bg);
   pointer-events: none;
 }
 .admin-mode .sidebar {
-  background: #121212;
+  grid-column: 1;
+  grid-row: 1;
+  background: var(--sidebar);
   border-right: 0;
 }
 .admin-mode .sidebar .space-picker,
@@ -7205,7 +7362,7 @@ button[aria-busy='true'] {
   color: #ebebeb;
 }
 .admin-nav-item.active {
-  background: #25272d;
+  background: var(--panel-raised);
   color: var(--accent);
 }
 .admin-nav-item:focus-visible {
@@ -7747,6 +7904,7 @@ button[aria-busy='true'] {
   }
 }
 
+
 .shell {
   grid-template-rows: minmax(0, 1fr) auto;
 }
@@ -7759,7 +7917,7 @@ button[aria-busy='true'] {
 .shell > .reading-layout > .site-footer {
   position: relative;
   z-index: 21;
-  grid-column: 1 / -1;
+  grid-column: 2 / -1;
   grid-row: 2;
   width: 100%;
   min-height: 64px;
@@ -9788,7 +9946,7 @@ body.wiki-mode .shell:has(#articleWrap:not([hidden])) .toc-inner {
   scrollbar-gutter: stable;
 }
 body.wiki-mode .shell:has(#articleWrap:not([hidden])) .site-footer {
-  grid-column: 1 / -1;
+  grid-column: 2 / -1;
   grid-row: 2;
   position: relative;
   z-index: 2;
@@ -11410,5 +11568,853 @@ body.light.wiki-mode .cookie-notice {
     background: var(--panel);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
+  }
+}
+
+/* Keep the administration surface aligned with the public reading frame. */
+.admin-mode .main-column {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+  background: transparent;
+}
+.admin-mode .site-footer {
+  grid-column: 2 / -1;
+  grid-row: 2;
+  min-width: 0;
+  background: var(--sidebar);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+.admin-mode .topbar {
+  background: var(--bg);
+  border-bottom-color: var(--line);
+}
+.admin-mode .shell::before {
+  bottom: 72px;
+}
+.light.admin-mode .shell,
+.light.admin-mode .sidebar {
+  background: var(--sidebar);
+}
+.light.admin-mode .shell::before {
+  background: var(--bg);
+  border-color: var(--line-soft);
+}
+
+/* Theme preference is read before CSS so the first skeleton frame matches it. */
+html.theme-light .global-loader {
+  background: #fafafa;
+  color-scheme: light;
+}
+html.theme-light .skeleton-sidebar {
+  background: #f4f4f5;
+  border-color: #e4e4e7;
+}
+html.theme-light .skeleton-block {
+  background: #e4e4e7;
+}
+html.theme-light .skeleton-block::after {
+  background: linear-gradient(90deg, transparent, #ffffffc9, transparent);
+}
+@media (max-width: 680px) {
+  .admin-mode .shell::before {
+    bottom: 72px;
+    left: 8px;
+  }
+  .admin-mode .main-column {
+    grid-column: auto;
+  }
+  .admin-mode .site-footer {
+    grid-column: auto;
+    grid-row: auto;
+  }
+}
+
+/* Keep the navigation rail stationary while the reading and footer area scrolls. */
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) {
+  display: grid;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .sidebar-slot {
+  grid-column: 1;
+  grid-row: 1;
+  width: var(--sidebar-width);
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .sidebar {
+  position: relative;
+  top: auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .reading-layout {
+  display: grid;
+  grid-column: 2;
+  grid-row: 1;
+  grid-template-columns: minmax(0, 1fr) var(--toc-width);
+  grid-template-rows: max-content max-content;
+  align-content: start;
+  width: 100%;
+  height: 100dvh;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .main-column {
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+  min-height: calc(100dvh - 64px);
+}
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .toc {
+  grid-column: 2;
+  grid-row: 1;
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: calc(100dvh - 64px);
+  min-height: 0;
+  overflow: hidden;
+}
+body.wiki-mode .shell:has(#articleWrap:not([hidden])) .site-footer {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  width: 100%;
+  min-width: 0;
+}
+
+/* Administration shares the public shell, independent rails and footer flow. */
+body.admin-mode {
+  height: 100dvh;
+  overflow: hidden;
+  color-scheme: dark;
+  --bg: #09090b;
+  --sidebar: #111113;
+  --panel: #111113;
+  --panel-raised: #18181b;
+  --line: #27272a;
+  --line-soft: #1f1f23;
+  --text: #fafafa;
+  --muted: #a1a1aa;
+  --faint: #71717a;
+  --accent: #e4e4e7;
+  --accent-strong: #fafafa;
+  --surface: #111113;
+  --surface-soft: #18181b;
+  --control-border: #3f3f46;
+  background: var(--bg);
+  color: var(--text);
+}
+body.admin-mode.light {
+  color-scheme: light;
+  --bg: #ffffff;
+  --sidebar: #fafafa;
+  --panel: #ffffff;
+  --panel-raised: #f4f4f5;
+  --line: #e4e4e7;
+  --line-soft: #f0f0f2;
+  --text: #18181b;
+  --muted: #52525b;
+  --faint: #71717a;
+  --accent: #27272a;
+  --accent-strong: #18181b;
+  --surface: #ffffff;
+  --surface-soft: #f4f4f5;
+  --control-border: #d4d4d8;
+}
+body.admin-mode .shell {
+  display: grid;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  background: var(--sidebar);
+}
+body.admin-mode .shell::before {
+  inset: 8px 8px 8px calc(var(--sidebar-width) + 8px);
+  border-color: var(--line-soft);
+  background: var(--bg);
+}
+body.admin-mode .sidebar-slot {
+  grid-column: 1;
+  grid-row: 1;
+  width: var(--sidebar-width);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+body.admin-mode .sidebar {
+  position: relative;
+  top: auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--sidebar);
+  border-color: var(--line);
+}
+body.admin-mode .reading-layout {
+  display: grid;
+  grid-column: 2;
+  grid-row: 1;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: start;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+body.admin-mode .main-column {
+  grid-column: 1;
+  grid-row: 1;
+  min-height: calc(100dvh - 64px);
+  padding-top: 56px;
+}
+body.admin-mode .topbar {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 50;
+  width: 100%;
+  height: 56px;
+  min-height: 56px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
+  backdrop-filter: blur(16px) saturate(1.08);
+}
+body.admin-mode .admin-panel {
+  width: min(100%, 1120px);
+  max-width: 1120px;
+  padding: 34px clamp(20px, 3vw, 36px) 48px;
+}
+body.admin-mode .admin-heading {
+  margin-bottom: 28px;
+}
+body.admin-mode .admin-heading h1 {
+  color: var(--text);
+  font-family: Manrope, 'DM Sans', sans-serif;
+  font-size: clamp(30px, 3.4vw, 38px);
+  letter-spacing: -0.04em;
+}
+body.admin-mode .admin-section {
+  border-color: var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 4%, transparent);
+}
+body.admin-mode .admin-section > p,
+body.admin-mode .admin-heading p {
+  color: var(--muted);
+}
+body.admin-mode .admin-nav-item {
+  border-radius: 9px;
+  color: var(--muted);
+}
+body.admin-mode .admin-nav-item.active {
+  border-inline-start: 2px solid var(--accent);
+  background: var(--panel-raised);
+  color: var(--text);
+}
+body.admin-mode .shell > .reading-layout > .site-footer {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 18px 28px;
+  border-top: 1px solid var(--line);
+  background: var(--sidebar);
+  color: var(--muted);
+  font-size: 12px;
+}
+body.light.admin-mode .shell::before {
+  background: var(--bg);
+  border-color: var(--line);
+}
+@media (max-width: 1180px) and (min-width: 941px) {
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .reading-layout {
+    --toc-width: 205px;
+  }
+}
+@media (max-width: 940px) and (min-width: 681px) {
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .reading-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: max-content max-content;
+  }
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .toc {
+    display: none;
+  }
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .site-footer {
+    grid-column: 1;
+  }
+}
+@media (max-width: 680px) {
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) {
+    display: block;
+    height: 100dvh;
+  }
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .sidebar-slot {
+    width: 0;
+    height: 0;
+    overflow: visible;
+  }
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .reading-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: max-content max-content max-content;
+    width: 100%;
+    height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .main-column {
+    grid-column: 1;
+    grid-row: 1;
+    min-height: max-content;
+    padding: 56px 14px 22px;
+  }
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .toc {
+    grid-column: 1;
+    grid-row: 2;
+    position: relative;
+    top: auto;
+    height: auto;
+    min-height: 0;
+    padding: 0 20px 20px;
+  }
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .toc-inner {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+  body.wiki-mode .shell:has(#articleWrap:not([hidden])) .site-footer {
+    grid-column: 1;
+    grid-row: 3;
+  }
+  body.admin-mode {
+    height: auto;
+    min-height: 100dvh;
+    overflow: auto;
+  }
+  body.admin-mode .shell {
+    display: block;
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+  body.admin-mode .shell::before {
+    display: none;
+  }
+  body.admin-mode .sidebar-slot {
+    width: 0;
+    height: 0;
+    overflow: visible;
+  }
+  body.admin-mode .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(320px, 88vw);
+    height: 100dvh;
+    transform: translateX(-105%);
+  }
+  body.admin-mode .sidebar.open {
+    transform: translateX(0);
+  }
+  body.admin-mode .reading-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    width: 100%;
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+  body.admin-mode .main-column {
+    grid-column: 1;
+    grid-row: 1;
+    min-height: 100dvh;
+    padding: 56px 14px 24px;
+  }
+  body.admin-mode .admin-panel {
+    padding: 26px 0 36px;
+  }
+  body.admin-mode .shell > .reading-layout > .site-footer {
+    grid-column: 1;
+    grid-row: 2;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px;
+  }
+}
+
+/* Let long admin panels define the scroll height so the footer cannot overlap them. */
+body.admin-mode .reading-layout {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+body.admin-mode .shell > .reading-layout > .main-column {
+  flex: 0 0 auto;
+  height: max-content;
+  min-height: 100dvh;
+}
+body.admin-mode .shell > .reading-layout > .site-footer {
+  grid-column: auto;
+  grid-row: auto;
+  flex: 0 0 auto;
+  position: relative;
+}
+@media (max-width: 680px) {
+  body.admin-mode .reading-layout {
+    height: auto;
+    overflow: visible;
+  }
+  body.admin-mode .shell > .reading-layout > .main-column {
+    height: auto;
+    min-height: 100dvh;
+  }
+}
+
+/* Match the public reader's header, surfaces and theme controls in administration. */
+body.admin-mode .shell::before {
+  border-radius: 18px;
+}
+body.admin-mode .main-column {
+  position: relative;
+  z-index: 2;
+  isolation: isolate;
+  overflow: visible;
+  background: transparent;
+}
+body.admin-mode .main-column::before {
+  position: absolute;
+  z-index: -1;
+  top: 56px;
+  right: 0;
+  left: 0;
+  height: min(720px, 88vh);
+  content: '';
+  pointer-events: none;
+  background-image:
+    radial-gradient(ellipse at 52% 0%, rgb(69 183 204 / 12%), transparent 50%),
+    radial-gradient(ellipse at 88% 5%, rgb(111 95 209 / 10%), transparent 37%),
+    radial-gradient(circle, rgb(142 157 178 / 17%) 0.7px, transparent 0.9px);
+  background-size: auto, auto, 22px 22px;
+  background-position: center top, right top, center 8px;
+  -webkit-mask-image: radial-gradient(ellipse 90% 76% at 52% 28%, #000 8%, transparent 100%);
+  mask-image: radial-gradient(ellipse 90% 76% at 52% 28%, #000 8%, transparent 100%);
+  opacity: 0.72;
+}
+body.admin-mode.light .main-column::before {
+  background-image:
+    radial-gradient(ellipse at 52% 0%, rgb(44 160 179 / 13%), transparent 52%),
+    radial-gradient(ellipse at 88% 5%, rgb(111 95 209 / 9%), transparent 38%),
+    radial-gradient(circle, rgb(85 105 130 / 16%) 0.7px, transparent 0.9px);
+  opacity: 0.62;
+}
+body.admin-mode .topbar {
+  border-bottom-color: color-mix(in srgb, var(--line) 75%, transparent);
+  background: color-mix(in srgb, var(--bg) 84%, transparent);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--text) 7%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.18);
+  backdrop-filter: blur(18px) saturate(1.18);
+}
+body.admin-mode .brand,
+body.admin-mode .brand:hover,
+body.admin-mode .breadcrumbs span:last-child {
+  color: var(--text);
+}
+body.admin-mode .brand-mark {
+  border-color: var(--line);
+  border-radius: 9px;
+  background: var(--panel-raised);
+  color: var(--accent);
+}
+body.admin-mode .breadcrumbs,
+body.admin-mode .header-links a {
+  color: var(--muted);
+}
+body.admin-mode .header-links a:hover,
+body.admin-mode .header-links a:focus-visible {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+body.admin-mode .topbar .icon-button,
+body.admin-mode .topbar .language-trigger,
+body.admin-mode .topbar .user-trigger {
+  min-height: 36px;
+  border-color: var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease;
+}
+body.admin-mode .topbar .icon-button:hover,
+body.admin-mode .topbar .language-trigger:hover,
+body.admin-mode .topbar .user-trigger:hover {
+  border-color: var(--control-border);
+  background: var(--panel-raised);
+  color: var(--text);
+}
+body.admin-mode:not(.auth-fullscreen):not(.editor-mode) .topbar .icon-button:hover,
+body.admin-mode:not(.auth-fullscreen):not(.editor-mode) .topbar .language-trigger:hover,
+body.admin-mode:not(.auth-fullscreen):not(.editor-mode) .topbar .user-trigger:hover {
+  border-color: var(--control-border);
+  background: var(--panel-raised);
+  color: var(--text);
+}
+body.admin-mode .topbar .theme-toggle {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}
+body.admin-mode .theme-toggle i {
+  display: none;
+}
+body.admin-mode:not(.light) .theme-toggle i:first-child,
+body.admin-mode.light .theme-toggle i:last-child {
+  display: block;
+}
+body.admin-mode .topbar .language-trigger {
+  padding-inline: 10px;
+}
+body.admin-mode .topbar .user-trigger {
+  min-height: 36px;
+  padding-inline: 11px;
+}
+body.admin-mode .topbar .user-menu,
+body.admin-mode .topbar .language-menu {
+  border-color: var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 16px 36px color-mix(in srgb, #000 18%, transparent);
+}
+body.admin-mode .topbar :is(button, a, input, select):focus-visible,
+body.admin-mode .admin-panel :is(button, a, input, select, textarea):focus-visible {
+  outline-color: var(--accent-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-strong) 18%, transparent);
+}
+body.admin-mode .admin-panel {
+  position: relative;
+  z-index: 1;
+}
+body.admin-mode .admin-heading h1 {
+  font-size: clamp(2.2rem, 4.2vw, 3rem);
+  line-height: 1.2;
+  text-wrap: balance;
+}
+body.admin-mode .admin-section,
+body.admin-mode .admin-panel .admin-section:not(.category-manager-section) {
+  border: 1px solid var(--line);
+  border-top-color: var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--bg));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 4%, transparent);
+}
+body.admin-mode.light .admin-panel .admin-section:not(.category-manager-section) {
+  border-top-color: var(--line);
+  background: var(--panel);
+}
+body.admin-mode .admin-section > h2::before,
+body.admin-mode .admin-section > .section-heading h2::before {
+  border-color: var(--line);
+  border-radius: 9px;
+  background: var(--panel-raised);
+  color: var(--muted);
+}
+body.admin-mode .admin-panel .category-manager-section > .section-heading {
+  border-color: var(--line);
+  border-top-color: var(--line);
+  border-radius: 12px 12px 0 0;
+  background: var(--panel);
+}
+body.admin-mode .admin-panel .category-manager-section > .section-heading h2::before {
+  border-color: var(--line);
+  background: var(--panel-raised);
+  color: var(--muted);
+}
+body.admin-mode .admin-panel .admin-tabs {
+  gap: 5px;
+  padding: 0 0 8px;
+  border-bottom-color: var(--line);
+}
+body.admin-mode .admin-panel .admin-tabs button {
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--muted);
+}
+body.admin-mode .admin-panel .admin-tabs button:hover,
+body.admin-mode .admin-panel .admin-tabs button.active {
+  border-color: var(--line);
+  background: var(--panel-raised);
+  color: var(--text);
+}
+body.admin-mode .admin-panel .settings-input,
+body.admin-mode .admin-panel input:not([type='checkbox']):not([type='radio']):not([type='file']),
+body.admin-mode .admin-panel select,
+body.admin-mode .admin-panel textarea {
+  border-color: var(--control-border);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text);
+}
+body.admin-mode .admin-panel .primary-button {
+  border-color: var(--text);
+  border-radius: 9px;
+  background: var(--text);
+  color: var(--bg);
+}
+body.admin-mode .admin-panel .primary-button:hover {
+  border-color: var(--muted);
+  background: var(--muted);
+  color: var(--bg);
+}
+body.admin-mode .admin-panel .secondary-button {
+  border-color: var(--line);
+  border-radius: 9px;
+  background: var(--panel-raised);
+  color: var(--text);
+}
+body.admin-mode .admin-nav-item {
+  min-height: 36px;
+  border-radius: 8px;
+  color: var(--muted);
+}
+body.admin-mode .admin-nav-item:hover,
+body.admin-mode .admin-nav-item.active {
+  background: var(--panel-raised);
+  color: var(--text);
+}
+body.admin-mode .admin-nav-item.active {
+  font-weight: 700;
+}
+body.admin-mode .site-footer {
+  border-top-color: var(--line);
+  background: var(--sidebar);
+  color: var(--muted);
+}
+@media (max-width: 680px) {
+  body.admin-mode .main-column::before {
+    top: 56px;
+    height: min(520px, 72vh);
+    background-size: auto, auto, 20px 20px;
+  }
+  body.admin-mode .topbar {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-left: max(8px, env(safe-area-inset-left, 0px));
+    padding-right: max(8px, env(safe-area-inset-right, 0px));
+  }
+}
+body.admin-mode.light .shell,
+body.admin-mode.light .sidebar {
+  background: var(--sidebar);
+}
+body.admin-mode.light .topbar .icon-button,
+body.admin-mode.light .topbar .language-trigger,
+body.admin-mode.light .topbar .user-trigger {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--text);
+}
+body.admin-mode.light:not(.auth-fullscreen):not(.editor-mode) .topbar {
+  border-bottom-color: color-mix(in srgb, var(--line) 75%, transparent);
+  background: color-mix(in srgb, var(--bg) 84%, transparent);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--text) 7%, transparent);
+}
+body.admin-mode.light:not(.auth-fullscreen):not(.editor-mode) .topbar .icon-button:hover,
+body.admin-mode.light:not(.auth-fullscreen):not(.editor-mode) .topbar .language-trigger:hover,
+body.admin-mode.light:not(.auth-fullscreen):not(.editor-mode) .topbar .user-trigger:hover {
+  border-color: var(--control-border);
+  background: var(--panel-raised);
+  color: var(--text);
+}
+body.admin-mode.light .admin-panel .primary-button {
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--bg);
+}
+body.admin-mode.light .admin-panel .primary-button:hover {
+  border-color: var(--muted);
+  background: var(--muted);
+  color: var(--bg);
+}
+body.admin-mode.light .admin-panel .secondary-button {
+  border-color: var(--line);
+  background: var(--panel-raised);
+  color: var(--text);
+}
+body.admin-mode.light .admin-panel .admin-tabs button.active {
+  border-color: var(--line);
+  background: var(--panel-raised);
+  color: var(--text);
+}
+body.admin-mode.light .admin-panel .admin-section > h2::before,
+body.admin-mode.light .admin-panel .admin-section > .section-heading h2::before,
+body.admin-mode.light .admin-panel .category-manager-section > .section-heading h2::before {
+  border-color: var(--line);
+  background: var(--panel-raised);
+  color: var(--muted);
+}
+body.admin-mode.light .admin-panel .category-manager-section > .section-heading {
+  border-color: var(--line);
+  border-top-color: var(--line);
+  background: var(--panel);
+}
+@media (prefers-reduced-transparency: reduce) {
+  body.admin-mode .topbar {
+    background: var(--panel);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* Flatten admin setting groups and let the main surface meet its footer. */
+body.admin-mode .shell {
+  background: var(--sidebar);
+}
+body.admin-mode .shell::before {
+  display: none;
+}
+body.admin-mode .reading-layout {
+  width: 100%;
+  background: var(--bg);
+}
+body.admin-mode .main-column {
+  width: 100%;
+  background: var(--bg);
+}
+body.admin-mode .admin-panel #adminContent {
+  gap: 0;
+}
+body.admin-mode .admin-panel .admin-section,
+body.admin-mode .admin-panel .admin-section:not(.category-manager-section),
+body.admin-mode .admin-panel .category-manager-section {
+  margin: 0;
+  padding: 24px 0;
+  border: 0;
+  border-radius: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  box-shadow: none;
+}
+body.admin-mode .admin-panel .admin-section:first-child,
+body.admin-mode .admin-panel #adminContent > .admin-section:first-child {
+  border-top: 0;
+}
+body.admin-mode .admin-panel .category-manager-section > .section-heading,
+body.admin-mode .admin-panel .category-manager-section > .category-rows {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+body.admin-mode .admin-panel .admin-section > h2::before,
+body.admin-mode .admin-panel .admin-section > .section-heading h2::before,
+body.admin-mode .admin-panel .category-manager-section > .section-heading h2::before {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+}
+body.admin-mode .shell > .reading-layout > .site-footer {
+  align-self: stretch;
+  width: 100%;
+  margin: 0;
+  background: var(--sidebar);
+}
+body.admin-mode.light .shell,
+body.admin-mode.light .reading-layout,
+body.admin-mode.light .main-column {
+  background: var(--bg);
+}
+body.admin-mode.light .shell > .reading-layout > .site-footer {
+  background: var(--sidebar);
+}
+
+/* Admin sections stay grouped as cards, using the active site theme. */
+body.admin-mode .admin-panel #adminContent {
+  gap: 14px;
+}
+body.admin-mode .admin-panel .admin-section,
+body.admin-mode .admin-panel .admin-section:not(.category-manager-section),
+body.admin-mode .admin-panel .category-manager-section {
+  margin: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--bg));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 4%, transparent);
+}
+body.admin-mode .admin-panel .category-manager-section > .section-heading {
+  margin: -18px -18px 0;
+  padding: 16px 18px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 13px 13px 0 0;
+  background: var(--panel-raised);
+}
+body.admin-mode .admin-panel .category-manager-section > .category-rows {
+  margin: 0 -18px -18px;
+  border: 0;
+  border-radius: 0 0 13px 13px;
+  background: transparent;
+}
+body.admin-mode .admin-panel .admin-section > h2::before,
+body.admin-mode .admin-panel .admin-section > .section-heading h2::before {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-raised);
+  color: var(--muted);
+}
+body.admin-mode.light .admin-panel .admin-section,
+body.admin-mode.light .admin-panel .admin-section:not(.category-manager-section),
+body.admin-mode.light .admin-panel .category-manager-section {
+  border-color: var(--line);
+  background: var(--panel);
+  box-shadow: 0 8px 24px color-mix(in srgb, #18181b 5%, transparent);
+}
+body.admin-mode.light .admin-panel .category-manager-section > .section-heading {
+  border-bottom-color: var(--line);
+  background: var(--panel-raised);
+}
+@media (max-width: 680px) {
+  body.admin-mode .admin-panel .admin-section,
+  body.admin-mode .admin-panel .admin-section:not(.category-manager-section),
+  body.admin-mode .admin-panel .category-manager-section {
+    padding: 14px;
+    border-radius: 12px;
+  }
+  body.admin-mode .admin-panel .category-manager-section > .section-heading {
+    margin: -14px -14px 0;
+    padding: 14px;
+  }
+  body.admin-mode .admin-panel .category-manager-section > .category-rows {
+    margin: 0 -14px -14px;
   }
 }

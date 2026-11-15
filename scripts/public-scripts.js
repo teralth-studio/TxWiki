@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { obfuscate } = require('js-confuser');
 const { minify } = require('html-minifier-terser');
+const lightningcss = require('lightningcss');
 const { prismBundle } = require('./prism-bundle');
 
 const publicRoot = path.join(__dirname, '..', 'public');
@@ -35,6 +36,8 @@ const options = {
   controlFlowFlattening: 0.15,
   pack: false,
 };
+// The main application is large; skip expensive transforms that caused a long cold start.
+const fastAppOptions = { ...options, stringConcealing: false, controlFlowFlattening: 0 };
 
 function composeAppScript(appSource, updatesSource) {
   return `(function(){\n${updatesSource}\n})();\n${appSource}`;
@@ -49,9 +52,9 @@ function invalidStaticPath(pathname) {
   );
 }
 
-async function obfuscateScript(source, isolate = false) {
+async function obfuscateScript(source, isolate = false, fast = false) {
   const input = isolate ? `(function(){\n${source}\n})();` : source;
-  const result = await obfuscate(input, options);
+  const result = await obfuscate(input, fast ? fastAppOptions : options);
   return result.code;
 }
 
@@ -59,11 +62,7 @@ async function compiledAsset(file, type) {
   const key = `${type}:${file}`;
   const filePath = path.join(publicRoot, file);
   const stat = await fs.promises.stat(filePath);
-  let signature = `${stat.size}:${stat.mtimeMs}`;
-  if (type === 'js' && file === 'app.js') {
-    const updatesStat = await fs.promises.stat(path.join(publicRoot, 'admin-updates.js'));
-    signature += `:${updatesStat.size}:${updatesStat.mtimeMs}`;
-  }
+  const signature = `${stat.size}:${stat.mtimeMs}`;
   const cached = cache.get(key);
   if (!cached || cached.signature !== signature) {
     const compilation = (async () => {
@@ -75,12 +74,9 @@ async function compiledAsset(file, type) {
           removeComments: true,
         });
       }
-      if (type === 'css') return source.toString('utf8');
-      if (file === 'app.js') {
-        const updatesSource = await fs.promises.readFile(path.join(publicRoot, 'admin-updates.js'), 'utf8');
-        source = Buffer.from(composeAppScript(source.toString('utf8'), updatesSource));
-      }
-      return obfuscateScript(source.toString('utf8'), !file.startsWith('vendor'));
+      if (type === 'css')
+        return lightningcss.transform({ filename: file, code: source, minify: true }).code.toString('utf8');
+      return obfuscateScript(source.toString('utf8'), !file.startsWith('vendor'), file === 'app.js');
     })();
     const entry = { signature, compilation };
     cache.set(key, entry);
@@ -129,7 +125,7 @@ function sendStandaloneUpdaterHtml() {
       '<div class="standalone-updater-title"><h1 data-es="Actualizador" data-en="System updater">System updater</h1>' +
       '<p data-es="Actualiza el sistema desde una página independiente." data-en="Update the system from this separate page.">Update the system from this separate page.</p></div>' +
       '<div class="standalone-updater-actions"><button class="standalone-updater-language" id="updateLanguageToggle" type="button">ES</button>' +
-      '<a class="standalone-updater-back" href="/admin/updates?space=main"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> <span data-es="Volver a administración" data-en="Back to administration">Back to administration</span></a></div>' +
+      '<a class="standalone-updater-back" href="/admin/updates"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> <span data-es="Volver a administración" data-en="Back to administration">Back to administration</span></a></div>' +
       '</header><div class="standalone-updater-error" id="updatePageError" role="alert" hidden></div>' +
       '<div class="standalone-updater-content" id="updateApp"></div></main>';
     html = html.replace(/<title>[^<]*<\/title>/i, '<title>System updater</title>');
