@@ -334,7 +334,7 @@ test('one signed release package carries verified installer files and update fil
     const pkg = await verifyUpdatePackage(packagePath, trustedPublicKey);
     assert.equal(pkg.version, '1.0.1');
     assert.ok(pkg.files.some(file => file.path === 'server.js'));
-    assert.ok(pkg.files.some(file => file.path === 'version.json'));
+    assert.ok(!pkg.files.some(file => file.path === 'version.json'));
     assert.ok(pkg.files.some(file => file.path === 'pterodactyl-start.js'));
     assert.ok(pkg.installation.some(file => file.path === '.env.example'));
     assert.ok(pkg.installation.some(file => file.path === 'version.json'));

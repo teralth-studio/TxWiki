@@ -90,6 +90,8 @@ async function createReleasePackage({
   const files = installationFiles.filter(
     file =>
       safeFilePath(file) &&
+      // Keep update manifests compatible with installations whose verifier predates version.json.
+      file !== 'version.json' &&
       !file.startsWith('scripts/default-theme/') &&
       file !== 'themes/README.md' &&
       file !== 'themes/default.zip' &&
