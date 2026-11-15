@@ -112,12 +112,12 @@ test('code blocks share the spoiler surface in dark and light themes', async ({ 
     };
     return [style('.wiki-spoiler'), style('.article .code-block')];
   });
-  expect(await surfaceStyles()).toEqual([
-    ['12px', 'rgb(52, 54, 56)', 'rgb(27, 28, 30)'],
-    ['12px', 'rgb(52, 54, 56)', 'rgb(27, 28, 30)'],
+  await expect.poll(surfaceStyles).toEqual([
+    ['12px', 'rgb(39, 39, 42)', 'rgb(17, 17, 19)'],
+    ['12px', 'rgb(39, 39, 42)', 'rgb(17, 17, 19)'],
   ]);
   await page.locator('#themeToggle').click();
-  await expect.poll(async () => (await surfaceStyles())[0][1]).toBe('rgb(216, 216, 211)');
+  await expect.poll(async () => (await surfaceStyles())[0][1]).toBe('rgb(223, 226, 230)');
   const light = await surfaceStyles();
   expect(light[0]).toEqual(light[1]);
 });
@@ -290,31 +290,33 @@ test('documentation uses a neutral near-black palette in both themes', async ({ 
       sidebar: color('#sidebar', 'backgroundColor'),
       surface: getComputedStyle(document.querySelector('.shell'), '::before').backgroundColor,
       activeBackground: color('.nav-link.active', 'backgroundColor'),
+      activeBackgroundImage: color('.nav-link.active', 'backgroundImage'),
       activeText: color('.nav-link.active', 'color'),
       article: color('#article', 'color'),
       title: color('#article h1', 'color'),
     };
   });
   await expect(page.locator('body')).toHaveClass(/wiki-mode/);
-  expect(await colors()).toEqual({
-    sidebar: 'rgb(23, 24, 25)',
-    surface: 'rgb(17, 18, 19)',
-    activeBackground: 'rgb(41, 42, 44)',
-    activeText: 'rgb(229, 229, 225)',
-    article: 'rgb(238, 238, 236)',
-    title: 'rgb(238, 238, 236)',
+  await expect.poll(colors).toMatchObject({
+    sidebar: 'rgb(17, 17, 19)',
+    surface: 'rgb(9, 9, 11)',
+    activeBackground: 'rgba(0, 0, 0, 0)',
+    activeText: 'rgb(250, 250, 250)',
+    article: 'rgb(250, 250, 250)',
+    title: 'rgb(250, 250, 250)',
   });
+  expect((await colors()).activeBackgroundImage).toContain('linear-gradient');
   await page.locator('#themeToggle').click();
-  await expect.poll(async () => (await colors()).activeBackground).toBe('rgb(229, 229, 225)');
   await expect(page.locator('body')).toHaveClass(/light/);
-  expect(await colors()).toEqual({
-    sidebar: 'rgb(239, 239, 236)',
-    surface: 'rgb(247, 247, 245)',
-    activeBackground: 'rgb(229, 229, 225)',
-    activeText: 'rgb(37, 38, 35)',
-    article: 'rgb(34, 35, 33)',
-    title: 'rgb(34, 35, 33)',
+  await expect.poll(colors).toMatchObject({
+    sidebar: 'rgb(242, 244, 246)',
+    surface: 'rgb(250, 251, 252)',
+    activeBackground: 'rgba(0, 0, 0, 0)',
+    activeText: 'rgb(24, 24, 27)',
+    article: 'rgb(36, 39, 44)',
+    title: 'rgb(36, 39, 44)',
   });
+  expect((await colors()).activeBackgroundImage).toContain('linear-gradient');
 });
 
 test('light theme keeps the reader on the same two-column shell grid', async ({ page }) => {
@@ -351,8 +353,7 @@ test('category separators have no background in either public theme', async ({ p
   await expect(category).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await page.locator('#themeToggle').click();
   await expect(category).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  const activeBackground = await activePage.evaluate(element => getComputedStyle(element).backgroundColor);
-  expect(activeBackground).not.toBe('rgba(0, 0, 0, 0)');
+  await expect(activePage).toHaveCSS('background-image', /linear-gradient/);
 });
 
 test('table of contents highlights the current heading with text and a dot only', async ({ page }) => {
@@ -360,6 +361,7 @@ test('table of contents highlights the current heading with text and a dot only'
   const toc = page.locator('#tocLinks');
   const active = toc.locator('a.active');
   await expect(active).toHaveText('Home');
+  await expect(active).toHaveCSS('font-weight', '700');
   const state = async (link) => link.evaluate(element => ({
     background: getComputedStyle(element).backgroundColor,
     weight: getComputedStyle(element).fontWeight,
@@ -385,6 +387,7 @@ test('table of contents highlights the current heading with text and a dot only'
   await nextHeading.evaluate(element => element.scrollIntoView({ block: 'start', behavior: 'instant' }));
   const nextActive = toc.locator('a.active');
   await expect(nextActive).toContainText('Getting started');
+  await expect(nextActive).toHaveCSS('font-weight', '700');
   expect(await state(nextActive)).toMatchObject({
     background: 'rgba(0, 0, 0, 0)',
     weight: '700',
@@ -559,7 +562,7 @@ for (const width of [1440, 800, 390]) {
     expect(positions.footerTop).toBeGreaterThanOrEqual(positions.mainBottom - 1);
     expect(positions.footerTop).toBeGreaterThanOrEqual(positions.tocBottom - 1);
     expect(positions.themeRight).toBeLessThanOrEqual(positions.accountLeft);
-    await expect(page.locator('#footerCopyright')).toContainText('Teralth Wiki · All rights reserved.');
+    await expect(page.locator('#footerCopyright')).toContainText(`© ${new Date().getFullYear()} Teralth Wiki`);
     await expect(page.locator('#footerContent')).toHaveText('Documentation');
     await page.locator('#acceptCookies').click({ timeout: 5000 });
     await page.locator('#readingLayout').evaluate(element => element.scrollTo({ top: element.scrollHeight, behavior: 'instant' }));
@@ -589,7 +592,7 @@ for (const width of [1440, 800, 390]) {
   });
 }
 
-test('footer copyright follows the selected language', async ({ page }) => {
+test('footer copyright and custom content remain visible when the language changes', async ({ page }) => {
   await page.route('**/api/config', route => route.fulfill({ json: {
     site: { name: 'Teralth Wiki', sidebarLabel: 'Custom footer' },
     spaces: [{ slug: 'main', name: 'Documentation' }], languages: ['en', 'es'], captcha: { enabled: false },
@@ -597,7 +600,13 @@ test('footer copyright follows the selected language', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('wiki-language', 'es'));
   await page.goto(origin);
   await expect(page.locator('#article')).toBeVisible();
-  await expect(page.locator('#footerCopyright')).toContainText('Teralth Wiki · Todos los derechos reservados.');
+  await expect(page.locator('#footerCopyright')).toContainText(`© ${new Date().getFullYear()} Teralth Wiki`);
+  await expect(page.locator('#footerContent')).toHaveText('Custom footer');
+  await page.locator('#languageButton').click();
+  await expect(page.locator('#languageMenu [data-lang="es"]')).toHaveAttribute('aria-checked', 'true');
+  await page.locator('#languageMenu [data-lang="en"]').click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('wiki-language'))).toBe('en');
+  await expect(page.locator('#footerCopyright')).toContainText(`© ${new Date().getFullYear()} Teralth Wiki`);
   await expect(page.locator('#footerContent')).toHaveText('Custom footer');
 });
 
