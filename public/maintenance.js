@@ -78,14 +78,14 @@
           : spanish ? 'Pendiente' : 'Pending';
       const amount = complete ? 100 : current ? phaseAmount : 0;
       bar.setAttribute('aria-valuenow', String(amount));
-      bar.firstElementChild.style.width = `${amount}%`;
+      bar.firstElementChild.style.setProperty('--progress', String(amount / 100));
     }
 
     const currentBar = document.getElementById('maintenanceCurrentPhaseBar');
     const currentBarText = document.getElementById('maintenanceCurrentPhasePercent');
     if (currentBar) {
       currentBar.setAttribute('aria-valuenow', String(phaseAmount));
-      currentBar.firstElementChild.style.width = `${phaseAmount}%`;
+      currentBar.firstElementChild.style.setProperty('--progress', String(phaseAmount / 100));
     }
     if (currentBarText) currentBarText.textContent = `${phaseAmount}%`;
     const phaseLabel = document.getElementById('maintenanceCurrentPhase');

@@ -1448,6 +1448,7 @@ function renderSpaces() {
   $('#spaceCurrentName').textContent = current.name;
   $('.space-symbol').innerHTML = spaceMarkMarkup(current);
   const menu = $('#spaceDropdownMenu');
+  menu.setAttribute('aria-label', t('Espacios de documentación', 'Documentation spaces'));
   menu.innerHTML = spaces
     .map(
       (space) =>
@@ -1507,7 +1508,8 @@ function renderLanguageMenu() {
   const languages = state.config.languages || ['en', 'es'];
   const selectedLanguage = languages.includes(state.lang) ? state.lang : languages[0] || 'en';
   const currentName = languageName(selectedLanguage);
-  trigger.querySelector('.language-current-flag').textContent = languageFlag(selectedLanguage);
+  trigger.querySelector('.language-current-flag').innerHTML =
+    '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="7.25"></circle><path d="M2.9 10h14.2M10 2.75c2 2 3 4.42 3 7.25s-1 5.25-3 7.25c-2-2-3-4.42-3-7.25s1-5.25 3-7.25Z"></path></svg>';
   trigger.querySelector('.language-current-name').textContent = currentName;
   trigger.setAttribute('aria-label', `${t('Cambiar idioma', 'Change language')}: ${currentName}`);
   box.innerHTML = languages
@@ -1576,6 +1578,7 @@ function renderSearchSuggestions(value = '') {
     input = $('#searchInput');
   if (!box || !input) return;
   const term = foldSearch(value.trim());
+  input.removeAttribute('aria-activedescendant');
   if (term.length < 2) {
     box.hidden = true;
     input.setAttribute('aria-expanded', 'false');
@@ -1599,10 +1602,10 @@ function renderSearchSuggestions(value = '') {
     ? searchMatches
         .map(
           ({ page, label }, index) =>
-            `<button type="button" class="search-suggestion" role="option" aria-selected="false" data-index="${index}" data-slug="${esc(page.slug)}"><i class="fa-solid fa-file-lines" aria-hidden="true"></i><span>${esc(label)}</span><small>/${esc(page.slug)}</small></button>`,
+            `<div id="search-option-${index}" class="search-suggestion" role="option" aria-selected="false" data-index="${index}" data-slug="${esc(page.slug)}"><i class="fa-solid fa-file-lines" aria-hidden="true"></i><span>${esc(label)}</span><small>/${esc(page.slug)}</small></div>`,
         )
         .join('')
-    : `<div class="search-suggestion-empty">${t('No hay resultados.', 'No results.')}</div>`;
+    : `<div class="search-suggestion-empty" role="option" aria-disabled="true" aria-selected="false">${t('No hay resultados.', 'No results.')}</div>`;
   box.hidden = false;
   input.setAttribute('aria-expanded', 'true');
 }
@@ -1611,6 +1614,7 @@ async function navigateToPage(slug) {
   history.pushState({}, '', navUrl(state.space, slug));
   $('#searchSuggestions').hidden = true;
   $('#searchInput').setAttribute('aria-expanded', 'false');
+  $('#searchInput').removeAttribute('aria-activedescendant');
   closeMobileNav();
   showLoading();
   try {
@@ -1627,6 +1631,7 @@ function renderNav() {
     pages = state.pages,
     pagesByCategory = new Map(),
     childrenByParent = new Map();
+  if (nav) nav.setAttribute('aria-label', t('Secciones', 'Sections'));
   for (const page of pages) {
     if (!page.category_id) continue;
     const key = String(page.category_id),
@@ -1943,8 +1948,16 @@ function renderPage(initialReactions = [], initialMine = '') {
 function paintReactions(counts = [], selected = '') {
   const map = Object.fromEntries(counts.map((x) => [x.mood, Number(x.count)]));
   $$('.reaction-buttons button').forEach((b) => {
+    const count = map[b.dataset.mood] || 0;
+    const moodLabel = {
+      happy: t('Sí, fue útil', 'Yes, helpful'),
+      neutral: t('Más o menos útil', 'Somewhat helpful'),
+      sad: t('No fue útil', 'Not helpful'),
+    }[b.dataset.mood];
     b.classList.toggle('selected', b.dataset.mood === selected);
-    $('span', b).textContent = map[b.dataset.mood] || 0;
+    $('span', b).textContent = count;
+    b.setAttribute('aria-label', `${moodLabel} (${count})`);
+    b.setAttribute('aria-pressed', String(b.dataset.mood === selected));
   });
 }
 function renderExternalRedirect(target) {
@@ -2058,6 +2071,7 @@ function setView(view) {
     $('#' + id).hidden = id !== view;
   document.body.classList.toggle('wiki-mode', view === 'articleWrap');
   document.body.classList.toggle('admin-mode', view === 'adminPanel');
+  $('#skipToContent').hidden = view !== 'articleWrap';
   const themedPublicView = ['articleWrap', 'authPanel', 'passwordWall'].includes(view);
   document.body.classList.toggle('theme-mode', themedPublicView);
   syncWikiTheme(themedPublicView);
@@ -2071,7 +2085,7 @@ function setView(view) {
 }
 function syncBrowserThemeColor() {
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.content = document.body.classList.contains('light') ? '#f7f7f5' : '#191715';
+  if (meta) meta.content = document.body.classList.contains('light') ? '#ffffff' : '#09090b';
 }
 function syncWikiTheme(enabled) {
   const linkId = 'activeWikiTheme';
@@ -7733,10 +7747,18 @@ function updateBrowserTitle(context) {
   if (loadingDepth === 0) document.title = browserTitle;
   const seo = state.config.site.seo || {};
   const canonical = document.querySelector('link[rel="canonical"]');
-  if (canonical && seo.canonicalBase) {
-    const base = new URL(seo.canonicalBase);
-    canonical.href = base.origin + base.pathname.replace(/\/$/, '') + location.pathname;
+  const canonicalBase = seo.canonicalBase || document.querySelector('meta[name="wiki-canonical-base"]')?.content;
+  if (canonical && canonicalBase) {
+    const base = new URL(canonicalBase);
+    const currentRoute = route();
+    const isHomePage = currentRoute.slug && currentRoute.slug === state.homePageSlug;
+    const path = isHomePage
+      ? state.space === 'main' ? '/' : `/${encodeURIComponent(state.space)}`
+      : location.pathname === '/' ? '/' : location.pathname.replace(/\/+$/, '');
+    canonical.href = base.origin + base.pathname.replace(/\/+$/, '') + path;
   }
+  const socialTitle = document.querySelector('meta[property="og:title"]');
+  if (socialTitle) socialTitle.content = `${context} | ${siteTitle}`;
 }
 function updateBrand() {
   const pageTitle = String(state.config.site.name || state.config.site.pageTitle || 'Teralth Wiki').trim(),
@@ -7756,6 +7778,15 @@ function updateBrand() {
   $('#footerContent').textContent = String(state.config.site.sidebarLabel || t('Documentación', 'Documentation'));
   $('#brand .brand-name').textContent = state.config.site.name;
   $('#mobileDocsBrand .mobile-docs-name').textContent = state.config.site.name;
+  $('#skipToContent').textContent = t('Saltar al contenido', 'Skip to content');
+  $('#searchInput').setAttribute('aria-label', t('Buscar documentación', 'Search documentation'));
+  $('#searchSuggestions').setAttribute('aria-label', t('Resultados de búsqueda', 'Search results'));
+  $('#navTree').setAttribute('aria-label', t('Secciones', 'Sections'));
+  $('#spaceDropdownMenu').setAttribute('aria-label', t('Espacios de documentación', 'Documentation spaces'));
+  $('#themeToggle').setAttribute('aria-label', t('Cambiar tema', 'Change theme'));
+  $('#openSidebar').setAttribute('aria-label', t('Abrir navegación', 'Open navigation'));
+  $('#closeSidebar').setAttribute('aria-label', t('Cerrar navegación', 'Close navigation'));
+  $('#mobileShade').setAttribute('aria-label', t('Cerrar navegación', 'Close navigation'));
   $('#mobileDocsSearch').setAttribute('aria-label', t('Buscar documentación', 'Search documentation'));
   const mark = $('#brand .brand-mark');
   const logo = String(state.config.site.logo || '');
@@ -7968,19 +7999,24 @@ $('#searchInput').oninput = (e) => {
 $('#searchInput').onkeydown = (e) => {
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     if ($('#searchSuggestions').hidden) return;
+    if (!searchMatches.length) return;
     e.preventDefault();
-    searchSelection =
-      (searchSelection + (e.key === 'ArrowDown' ? 1 : -1) + searchMatches.length) % searchMatches.length;
+    searchSelection = searchSelection < 0
+      ? (e.key === 'ArrowDown' ? 0 : searchMatches.length - 1)
+      : (searchSelection + (e.key === 'ArrowDown' ? 1 : -1) + searchMatches.length) % searchMatches.length;
     $$('.search-suggestion', $('#searchSuggestions')).forEach((item, index) => {
       item.setAttribute('aria-selected', String(index === searchSelection));
       if (index === searchSelection) item.scrollIntoView({ block: 'nearest' });
     });
+    $('#searchInput').setAttribute('aria-activedescendant', `search-option-${searchSelection}`);
   } else if (e.key === 'Enter' && !$('#searchSuggestions').hidden && searchMatches.length) {
     e.preventDefault();
     const match = searchMatches[searchSelection >= 0 ? searchSelection : 0];
     if (match) navigateToPage(match.page.slug);
   } else if (e.key === 'Escape') {
     $('#searchSuggestions').hidden = true;
+    $('#searchInput').setAttribute('aria-expanded', 'false');
+    $('#searchInput').removeAttribute('aria-activedescendant');
     e.stopPropagation();
   }
 };

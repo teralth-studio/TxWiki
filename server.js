@@ -5371,6 +5371,60 @@ function replaceElementContents(html, tag, replacement) {
   const closingEnd = closingStart + tag.length + 3;
   return html.slice(0, start) + `<${tag}>${replacement}</${tag}>` + html.slice(closingEnd);
 }
+function canonicalSeoBase(site) {
+  for (const candidate of [site?.seo?.canonicalBase, process.env.BASE_URL]) {
+    if (!candidate) continue;
+    try {
+      const url = new URL(candidate);
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash)
+        continue;
+      return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+    } catch {}
+  }
+  return '';
+}
+const xmlEscape = (value) =>
+  String(value).replace(/[<>&"']/g, (character) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' })[character]);
+async function publicPageMetadata(req) {
+  let segments;
+  try {
+    segments = req.path.split('/').filter(Boolean).map(decodeURIComponent);
+  } catch {
+    return { notFound: true };
+  }
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) return { notFound: true };
+  const spaces = await query('SELECT slug,home_page_slug FROM spaces');
+  const requestedSpace = spaces.find((space) => space.slug.toLowerCase() === String(segments[0] || '').toLowerCase());
+  const mainSpace = spaces.find((space) => space.slug === 'main');
+  let space = requestedSpace || mainSpace,
+    slug = requestedSpace ? segments.slice(1).join('/') : segments.join('/');
+  if (!space || (segments.length > 1 && !requestedSpace)) return { notFound: true };
+  if (!slug) slug = space.home_page_slug || '';
+  if (!slug) return { notFound: true };
+  const [page] = await query(
+    "SELECT page_type,titles,content FROM pages WHERE space_slug=? AND slug=? LIMIT 1",
+    [space.slug, slug],
+  );
+  if (!page || page.page_type === 'redirect') return { notFound: true };
+  const titles = json(page.titles) || {},
+    pageTitle = String(titles.en || titles['en-US'] || Object.values(titles).find((value) => typeof value === 'string' && value.trim()) || '').trim();
+  if (!pageTitle) return { notFound: true };
+  let content = {};
+  try { content = safePageContent(page.content); } catch {}
+  const html = String(content.en || content['en-US'] || Object.values(content).find((value) => typeof value === 'string') || '');
+  const description = html
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&(?:#\d+|#x[\da-f]+|[a-z]+);/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
+  const homePath = space.slug === 'main' ? '/' : `/${encodeURIComponent(space.slug)}`;
+  return {
+    title: pageTitle,
+    description,
+    canonicalPath: slug === space.home_page_slug ? homePath : req.path === '/' ? '/' : req.path.replace(/\/+$/, ''),
+  };
+}
 const sendAppIndex = sendPublicHtml('index.html', async (html, req) => {
   const [row] = await query("SELECT setting_value FROM settings WHERE setting_key='site' LIMIT 1"),
     site = row ? json(row.setting_value) : {},
@@ -5384,23 +5438,33 @@ const sendAppIndex = sendPublicHtml('index.html', async (html, req) => {
     privatePage = /^\/(?:admin|login|register|reset|verify|change-password|two-factor(?:-setup)?)(?:\/|$)/.test(req.path || ''),
     meta = (key, value, attr = 'name') =>
       `<meta ${attr}="${key}" content="${escapeHeadValue(value)}">`;
-  let head = meta('robots', privatePage || seo.indexable === false ? 'noindex, nofollow' : 'index, follow');
-  if (seo.description) head += meta('description', seo.description);
-  if (seo.socialDescription || seo.description)
-    head += meta('og:description', seo.socialDescription || seo.description, 'property');
+  const pageMetadata = !privatePage && seo.indexable !== false ? await publicPageMetadata(req) : null,
+    pageTitle = pageMetadata?.title ? `${pageMetadata.title} | ${name}` : name,
+    pageDescription = pageMetadata?.description || seo.description || '',
+    canonicalBase = !privatePage ? canonicalSeoBase(site) : '';
+  let head = meta(
+    'robots',
+    privatePage || seo.indexable === false || pageMetadata?.notFound ? 'noindex, nofollow' : 'index, follow',
+  );
+  if (pageDescription) head += meta('description', pageDescription);
+  if (seo.socialDescription || pageDescription)
+    head += meta('og:description', pageMetadata ? pageDescription : seo.socialDescription || pageDescription, 'property');
+  if (!privatePage) head += meta('og:type', pageMetadata ? 'article' : 'website', 'property');
   if (seo.socialImage) {
     const imageBase = seo.canonicalBase || process.env.BASE_URL;
     const image = seo.socialImage.startsWith('/') && imageBase ? new URL(seo.socialImage, imageBase).href : seo.socialImage;
     head += meta('og:image', image, 'property');
   }
-  if (!privatePage && seo.canonicalBase) {
-    const base = new URL(seo.canonicalBase);
-    const canonical = base.origin + base.pathname.replace(/\/$/, '') + (req.path || '/');
+  if (canonicalBase) {
+    const base = new URL(canonicalBase);
+    const requestPath = pageMetadata?.canonicalPath || (req.path === '/' ? '/' : (req.path || '/').replace(/\/+$/, ''));
+    const canonical = base.origin + base.pathname.replace(/\/+$/, '') + requestPath;
+    head += meta('wiki-canonical-base', canonicalBase);
     head += `<link rel="canonical" href="${escapeHeadValue(canonical)}">`;
   }
   const headEnd = html.indexOf('</head>');
   if (headEnd >= 0) html = html.slice(0, headEnd) + head + html.slice(headEnd);
-  html = replaceElementContents(html, 'title', escapeHeadValue(name));
+  html = replaceElementContents(html, 'title', escapeHeadValue(pageTitle));
   html = replaceOpeningTag(
     html,
     '<meta name="application-name"',
@@ -5411,9 +5475,9 @@ const sendAppIndex = sendPublicHtml('index.html', async (html, req) => {
     html,
     '<meta property="og:title"',
     'content="',
-    '<meta property="og:title" content="' + escapeHeadValue(seo.socialTitle || name) + '">',
+    '<meta property="og:title" content="' + escapeHeadValue(pageMetadata ? pageTitle : seo.socialTitle || name) + '">',
   );
-  return replaceOpeningTag(
+  html = replaceOpeningTag(
     html,
     '<link id="siteFavicon"',
     '',
@@ -5423,6 +5487,73 @@ const sendAppIndex = sendPublicHtml('index.html', async (html, req) => {
       escapeHeadValue(favicon) +
       '">',
   );
+  return {
+    html,
+    status: !privatePage && pageMetadata?.notFound ? 404 : 200,
+  };
+});
+app.get('/robots.txt', async (req, res, next) => {
+  try {
+    const [row] = await query("SELECT setting_value FROM settings WHERE setting_key='site' LIMIT 1"),
+      site = row ? json(row.setting_value) : {},
+      sitemapBase = site.seo?.indexable === false ? '' : canonicalSeoBase(site),
+      sitemapPath = sitemapBase ? new URL(sitemapBase).pathname.replace(/\/+$/, '') : '',
+      lines = [
+        'User-agent: *',
+        'Allow: /',
+        `Disallow: ${sitemapPath}/admin`,
+        `Disallow: ${sitemapPath}/api/`,
+        `Disallow: ${sitemapPath}/login`,
+        `Disallow: ${sitemapPath}/register`,
+        `Disallow: ${sitemapPath}/reset`,
+        `Disallow: ${sitemapPath}/verify`,
+        `Disallow: ${sitemapPath}/change-password`,
+        `Disallow: ${sitemapPath}/two-factor`,
+      ];
+    if (sitemapBase) lines.push(`Sitemap: ${sitemapBase}/sitemap.xml`);
+    res.set('Cache-Control', 'public, max-age=300').type('text/plain').send(`${lines.join('\n')}\n`);
+  } catch (error) {
+    next(error);
+  }
+});
+app.get('/sitemap.xml', async (req, res, next) => {
+  try {
+    const [row] = await query("SELECT setting_value FROM settings WHERE setting_key='site' LIMIT 1"),
+      site = row ? json(row.setting_value) : {},
+      base = site.seo?.indexable === false ? '' : canonicalSeoBase(site);
+    if (!base) return res.status(404).type('text/plain').send('Sitemap unavailable. Configure a canonical base URL or BASE_URL.');
+    if (site.seo?.indexable === false) return res.status(404).type('text/plain').send('Sitemap indexing is disabled.');
+    const [spaces, pages] = await Promise.all([
+      query('SELECT slug,home_page_slug FROM spaces ORDER BY sort_order,slug'),
+      query("SELECT space_slug,slug,updated_at FROM pages WHERE page_type='content' ORDER BY space_slug,slug"),
+    ]);
+    const locations = new Map();
+    const addLocation = (path, updatedAt = null) => {
+      const normalized = path === '/' ? '/' : path.replace(/\/+$/, '');
+      const lastmod = updatedAt ? new Date(updatedAt) : null;
+      locations.set(normalized, lastmod && Number.isFinite(lastmod.getTime()) ? lastmod.toISOString() : '');
+    };
+    for (const space of spaces) {
+      const spacePath = space.slug === 'main' ? '' : `/${encodeURIComponent(space.slug)}`;
+      addLocation(spacePath || '/', null);
+    }
+    for (const page of pages) {
+      const space = spaces.find((item) => item.slug === page.space_slug);
+      if (!space || (space.home_page_slug && page.slug === space.home_page_slug)) continue;
+      const pagePath = `/${page.space_slug === 'main' ? '' : `${encodeURIComponent(page.space_slug)}/`}${encodeURIComponent(page.slug)}`;
+      addLocation(pagePath, page.updated_at);
+    }
+    if (locations.size > 50000) return res.status(500).type('text/plain').send('Sitemap exceeds the 50,000 URL limit.');
+    const prefix = new URL(base).pathname.replace(/\/+$/, '');
+    const entries = [...locations].map(([path, lastmod]) => {
+      const loc = `${new URL(base).origin}${prefix}${path}`;
+      return `<url><loc>${xmlEscape(loc)}</loc>${lastmod ? `<lastmod>${lastmod}</lastmod>` : ''}</url>`;
+    });
+    const xml = `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${entries.join('')}</urlset>`;
+    res.set('Cache-Control', 'public, max-age=300').type('application/xml').send(xml);
+  } catch (error) {
+    next(error);
+  }
 });
 app.get(['/login', '/register', '/reset', '/verify'], sendAppIndex);
 const adminPanelPermissions = ['admin.view'];

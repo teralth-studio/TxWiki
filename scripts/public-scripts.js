@@ -96,7 +96,15 @@ function sendPublicHtml(file, transformHtml) {
   return async (req, res, next) => {
     try {
       let body = await compiledAsset(file, 'html');
-      if (transformHtml) body = await transformHtml(body, req);
+      if (transformHtml) {
+        const transformed = await transformHtml(body, req);
+        if (typeof transformed === 'string') body = transformed;
+        else if (transformed && typeof transformed.html === 'string') {
+          body = transformed.html;
+          if (Number.isInteger(transformed.status) && transformed.status >= 100 && transformed.status <= 599)
+            res.status(transformed.status);
+        }
+      }
       res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
       return res.type('html').send(body);
     } catch (error) {

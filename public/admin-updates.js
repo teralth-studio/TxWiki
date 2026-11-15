@@ -450,7 +450,8 @@ async function runUpdate({
       item?.classList.toggle('is-active', active);
       item?.classList.toggle('is-failed', active && currentStage === 'failed');
       phaseBar?.setAttribute('aria-valuenow', String(amount));
-      if (phaseBar?.firstElementChild) phaseBar.firstElementChild.style.width = `${amount}%`;
+      if (phaseBar?.firstElementChild)
+        phaseBar.firstElementChild.style.setProperty('--progress', String(amount / 100));
       if (state)
         state.textContent = complete
           ? t('Completada', 'Complete')

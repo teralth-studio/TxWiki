@@ -91,7 +91,7 @@ h1 { margin: 0 0 7px; font: 700 26px/1.25 Manrope, 'DM Sans', sans-serif; letter
 .progress-ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
 .progress-ring circle { fill: none; stroke-width: 7; }
 .progress-track { stroke: #34363e; }
-.progress-arc { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .3s ease; }
+.progress-arc { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset 320ms cubic-bezier(.2, .72, .24, 1); }
 .progress-ring span { font: 700 28px Manrope, sans-serif; }
 .fatal-box { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; background: #111214; z-index: 20; }
 .fatal-box-card { width: min(100%, 500px); padding: 32px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }

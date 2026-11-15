@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#111214" />
-    <meta name="application-name" content="Teralth Wiki" />
-    <meta property="og:title" content="Teralth Wiki" />
-    <title>Loading...</title>
+    <meta name="application-name" content="Teralth Studio" />
+    <meta property="og:title" content="Teralth Studio" />
+    <title>Teralth Studio</title>
     <link id="siteFavicon" rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
     <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css" />
     <link rel="stylesheet" href="/styles.css" />
@@ -37,6 +37,7 @@
       </div>
     </div>
     <div id="app" class="shell">
+      <a id="skipToContent" class="skip-to-content" href="#article">Skip to content</a>
       <div class="sidebar-slot">
       <aside class="sidebar" id="sidebar">
         <div class="brand-row">
@@ -63,18 +64,22 @@
           ></div>
         </div>
         <div class="search-box">
-          <i class="fa-solid fa-magnifying-glass"></i
-          ><input
+          <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i
+          ><label class="sr-only" for="searchInput">Search documentation</label><input
             id="searchInput"
             type="search"
+            role="combobox"
+            aria-label="Search documentation"
             placeholder="Search documentation"
             autocomplete="off"
             aria-controls="searchSuggestions"
             aria-expanded="false"
+            aria-haspopup="listbox"
+            aria-autocomplete="list"
           /><kbd>⌘ K</kbd>
-          <div class="search-suggestions" id="searchSuggestions" role="listbox" hidden></div>
+            <div class="search-suggestions" id="searchSuggestions" role="listbox" aria-label="Search results" hidden></div>
         </div>
-        <nav class="nav-tree" id="navTree" aria-label="Secciones"></nav>
+        <nav class="nav-tree" id="navTree" aria-label="Sections"></nav>
         <nav class="admin-navigation" id="adminNavigation" aria-label="Administration" hidden></nav>
         <section class="support-card" id="supportCard" aria-label="Support">
           <div class="support-card-heading">
@@ -98,7 +103,7 @@
           <button class="icon-button mobile-menu" id="openSidebar" aria-label="Open navigation">
             <i class="fa-solid fa-bars"></i>
           </button>
-          <a href="/" class="mobile-docs-brand" id="mobileDocsBrand"><span class="brand-mark"></span><span class="mobile-docs-name">Teralth Wiki</span></a>
+          <a href="/" class="mobile-docs-brand" id="mobileDocsBrand"><span class="brand-mark"></span><span class="mobile-docs-name">Teralth Studio</span></a>
           <button class="icon-button mobile-docs-search" id="mobileDocsSearch" type="button" aria-label="Search documentation">
             <i class="fa-solid fa-magnifying-glass"></i>
           </button>
@@ -111,7 +116,7 @@
               <button
                 class="language-trigger"
                 id="languageButton"
-                aria-label="Cambiar idioma"
+                aria-label="Change language"
                 aria-haspopup="menu"
                 aria-expanded="false"
                 aria-controls="languageMenu"
@@ -120,9 +125,9 @@
                 <span class="language-current-name"></span>
                 <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
               </button>
-              <div class="language-menu" id="languageMenu" role="menu" aria-label="Idioma"></div>
+              <div class="language-menu" id="languageMenu" role="menu" aria-label="Languages"></div>
             </div>
-            <button class="icon-button theme-toggle" id="themeToggle" aria-label="Cambiar tema">
+            <button class="icon-button theme-toggle" id="themeToggle" aria-label="Change theme">
               <i class="fa-regular fa-sun"></i><i class="fa-regular fa-moon"></i>
             </button>
             <div class="user-menu-wrap top-user-menu-wrap">
@@ -143,17 +148,39 @@
             </div>
           </div>
         </header>
+        <aside
+          id="cookieNotice"
+          class="cookie-notice"
+          role="region"
+          aria-live="polite"
+          aria-labelledby="cookieNoticeTitle"
+          aria-describedby="cookieNoticeText"
+          hidden
+        >
+          <div class="cookie-notice-content">
+            <span class="cookie-notice-icon" aria-hidden="true"><i class="fa-solid fa-cookie-bite"></i></span>
+            <div class="cookie-notice-copy">
+              <h2 id="cookieNoticeTitle">Cookies</h2>
+              <p id="cookieNoticeText">
+                We use essential cookies to make the wiki work and remember your preferences.
+              </p>
+            </div>
+          </div>
+          <div class="cookie-notice-actions">
+            <button id="acceptCookies" class="primary-button" type="button">Accept</button>
+          </div>
+        </aside>
         <div id="notice" class="notice" hidden></div>
         <section class="article-wrap" id="articleWrap">
-          <article class="article" id="article"></article>
+          <article class="article" id="article" tabindex="-1"></article>
           <section class="reactions" id="reactions">
             <p>Was this page helpful?</p>
             <div class="reaction-buttons">
-              <button data-mood="happy" aria-label="Yes, it was helpful">
+              <button data-mood="happy" aria-label="Yes, helpful (0)" aria-pressed="false">
                 <i class="fa-regular fa-face-smile"></i><span>0</span></button
-              ><button data-mood="neutral" aria-label="Somewhat helpful">
+              ><button data-mood="neutral" aria-label="Somewhat helpful (0)" aria-pressed="false">
                 <i class="fa-regular fa-face-meh"></i><span>0</span></button
-              ><button data-mood="sad" aria-label="No, it was not helpful">
+              ><button data-mood="sad" aria-label="Not helpful (0)" aria-pressed="false">
                 <i class="fa-regular fa-face-frown"></i><span>0</span>
               </button>
             </div>
@@ -175,27 +202,5 @@
       </footer>
       </div>
     </div>
-    <aside
-      id="cookieNotice"
-      class="cookie-notice"
-      role="region"
-      aria-live="polite"
-      aria-labelledby="cookieNoticeTitle"
-      aria-describedby="cookieNoticeText"
-      hidden
-    >
-      <div class="cookie-notice-content">
-        <span class="cookie-notice-icon" aria-hidden="true"><i class="fa-solid fa-cookie-bite"></i></span>
-        <div class="cookie-notice-copy">
-          <h2 id="cookieNoticeTitle">Cookies</h2>
-          <p id="cookieNoticeText">
-            We use essential cookies to make the wiki work and remember your preferences.
-          </p>
-        </div>
-      </div>
-      <div class="cookie-notice-actions">
-        <button id="acceptCookies" class="primary-button" type="button">Accept</button>
-      </div>
-    </aside>
   </body>
 </html>
