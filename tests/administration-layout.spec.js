@@ -310,8 +310,10 @@ test('administration header stays available while scrolling settings', async ({ 
   await page.setViewportSize({ width: 1440, height: 700 });
   await page.goto(`${origin}/admin`);
   await page.locator('#adminNavigation [data-tab="settings"]').click();
-  await page.evaluate(() => window.scrollTo({ top: 500, behavior: 'instant' }));
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(300);
+  await expect(page.locator('#siteName')).toBeVisible();
+  const readingArea = page.locator('.reading-layout');
+  await readingArea.evaluate(element => { element.scrollTop = 500; });
+  await expect.poll(() => readingArea.evaluate(element => element.scrollTop)).toBeGreaterThan(300);
   expect(Math.abs((await page.locator('.topbar').boundingBox()).y)).toBeLessThan(1);
   await page.locator('#accountLink').click();
   await expect(page.locator('#userMenu')).toBeVisible();
@@ -521,7 +523,7 @@ test('support translations and SEO settings are saved and applied', async ({ pag
   expect(submitted.support.translations.es.title).toBe('Ayuda');
   expect(submitted.seo).toMatchObject({ description: 'Site description', canonicalBase: 'https://example.test/docs', indexable: false });
   await expect(page.locator('#footerContent')).toHaveText('Footer label');
-  await expect(page.locator('#footerCopyright')).toContainText('Example · All rights reserved.');
+  await expect(page.locator('#footerCopyright')).toContainText(`© ${new Date().getFullYear()} Example`);
   await expect(page.locator('#supportTitle')).toHaveText('Help');
   await expect(page.locator('#supportCard')).toHaveCSS('background-image', /linear-gradient/);
   await expect(page.locator('#supportLink')).toHaveCSS('background-color', 'rgb(51, 68, 85)');
@@ -546,10 +548,10 @@ for (const width of [1440, 390]) {
 
 test('light theme keeps the administration and editor usable', async ({ page }) => {
   await page.goto(`${origin}/admin`);
-  await expect(page.locator('#sidebar')).toHaveCSS('background-color', 'rgb(18, 18, 18)');
+  await expect(page.locator('#sidebar')).toHaveCSS('background-color', 'rgb(17, 17, 19)');
   await page.locator('#themeToggle').click();
   await expect(page.locator('body')).toHaveClass(/light/);
-  await expect(page.locator('#sidebar')).toHaveCSS('background-color', 'rgb(245, 245, 245)');
+  await expect(page.locator('#sidebar')).toHaveCSS('background-color', 'rgb(250, 250, 250)');
   await page.locator('#accountLink').click();
   await expect(page.locator('#userMenu')).toBeVisible();
   await page.locator('#accountLink').click();
