@@ -202,7 +202,8 @@ for (const width of [1440, 390]) {
     await page.goto(`${origin}/admin`);
     await expect(page.locator('#pageRows .edit-page')).toBeVisible();
     if (width < 680) await page.locator('#openSidebar').click();
-    await expect(page.locator('#adminNavigation [data-tab]')).toHaveCount(15);
+    await expect(page.locator('#adminNavigation [data-tab]')).toHaveCount(16);
+    await expect(page.locator('#adminNavigation [data-tab="jobs"]')).toBeVisible();
     await expect(page.locator('#spacePicker')).toBeHidden();
     await expect(page.locator('#searchInput')).toBeHidden();
     await expect(page.locator('#supportCard')).toBeHidden();
