@@ -2256,7 +2256,7 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
       ],
       ['captcha', t('Captcha', 'Captcha'), ['captcha.configure']],
       ['logs', t('Registros', 'Logs'), ['logs.view']],
-      ['jobs', t('Trabajos', 'Jobs'), ['logs.view']],
+      ['jobs', t('Trabajos', 'Jobs'), ['admin.view']],
       ['themes', t('Temas', 'Themes'), ['themes.manage']],
       ['updates', t('Update', 'Update'), ['updates.install']],
     ],

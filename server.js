@@ -44,6 +44,7 @@ const { normalizeSiteOptions, normalizeSupportUrl } = require('./scripts/site-se
 const { HEADER_LINK_LIMIT, normalizeHeaderLink, normalizeHeaderLinks } = require('./scripts/header-links');
 const { migrateSitePermissions } = require('./scripts/role-permissions');
 const { createAdminAuditMiddleware } = require('./scripts/admin-audit-log');
+const { ensureBackgroundJobHistory } = require('./scripts/background-job-history');
 const { capturePageRevision } = require('./scripts/page-revisions');
 const { ARCHIVE_NAME: themeSourceArchiveName, ensureThemeSourceArchive } = require('./scripts/theme-source-package');
 const { systemVersion } = require('./scripts/system-version');
@@ -722,9 +723,7 @@ async function applySchema() {
       throw error;
     }
   }
-  await pool.query(
-    "INSERT IGNORE INTO background_job_history (id,status,category,action,error_code,created_at,updated_at) SELECT id,CASE status WHEN 'queued' THEN 'queued' WHEN 'processing' THEN 'running' WHEN 'done' THEN 'success' ELSE 'error' END,CASE job_type WHEN 'mail' THEN 'SMTP' WHEN 'backup' THEN 'Backups' ELSE 'System' END,CASE job_type WHEN 'mail' THEN 'Send email' WHEN 'backup' THEN 'Create backup' ELSE 'Execute system task' END,CASE WHEN status='failed' THEN 'JOB_FAILED' ELSE NULL END,created_at,COALESCE(completed_at,created_at) FROM background_jobs",
-  );
+  await ensureBackgroundJobHistory(pool, activeDatabaseType);
   for (const statement of activeDatabaseType === 'mysql' ? schemaIndexStatements : []) {
     try {
       await pool.query(statement);
@@ -3937,7 +3936,7 @@ app.get('/api/admin/logs', auth, requirePermission('logs.view'), async (req, res
     next(error);
   }
 });
-app.get('/api/admin/jobs', auth, requirePermission('logs.view'), async (req, res, next) => {
+app.get('/api/admin/jobs', auth, requirePermission('admin.view'), async (req, res, next) => {
   try {
     const rawPage = req.query.page === undefined ? '1' : String(req.query.page),
       pageNumber = Number(rawPage),

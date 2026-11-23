@@ -102,7 +102,13 @@ async function createReleasePackage({
     id,
     version,
     files,
-    migrations: [],
+    migrations: [
+      {
+        id: 'background-job-history-2026-11-23',
+        path: '20261123-background-job-history.sql',
+        source: 'migrations/20261123-background-job-history.sql',
+      },
+    ],
     installationFiles,
     projectRoot,
     ...(destinationDirectory ? { destinationDirectory } : {}),

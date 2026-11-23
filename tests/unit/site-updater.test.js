@@ -281,12 +281,18 @@ test('one signed release package carries verified installer files and update fil
     await fs.promises.writeFile(signingKeyPath, privateKey.export({ type: 'pkcs8', format: 'pem' }));
     await fs.promises.mkdir(path.join(projectRoot, 'public'), { recursive: true });
     await fs.promises.mkdir(path.join(projectRoot, 'scripts'), { recursive: true });
+    await fs.promises.mkdir(path.join(projectRoot, 'migrations'), { recursive: true });
     await fs.promises.mkdir(path.join(projectRoot, 'themes'), { recursive: true });
     await fs.promises.mkdir(path.join(projectRoot, '.github', 'modernize'), { recursive: true });
     await fs.promises.mkdir(path.join(projectRoot, 'update_zips'), { recursive: true });
     await fs.promises.mkdir(path.join(projectRoot, 'data'), { recursive: true });
     await fs.promises.writeFile(path.join(projectRoot, 'server.js'), 'module.exports = true;');
     await fs.promises.writeFile(path.join(projectRoot, 'version.json'), '{"version":"1.0.1"}\n');
+    await fs.promises.writeFile(path.join(projectRoot, 'schema.sql'), 'CREATE TABLE background_job_history (id BIGINT);');
+    await fs.promises.writeFile(
+      path.join(projectRoot, 'migrations', '20261123-background-job-history.sql'),
+      'CREATE TABLE IF NOT EXISTS background_job_history (id BIGINT NOT NULL PRIMARY KEY);',
+    );
     await fs.promises.writeFile(path.join(projectRoot, 'schema.sqlite.sql'), 'CREATE TABLE pages (id INTEGER);');
     await fs.promises.writeFile(
       path.join(projectRoot, 'pterodactyl-start.js'),
@@ -296,6 +302,7 @@ test('one signed release package carries verified installer files and update fil
     await fs.promises.writeFile(path.join(projectRoot, '.env'), 'DB_PASSWORD=secret\n');
     await fs.promises.writeFile(path.join(projectRoot, 'public', 'app.js'), 'window.releaseReady = true;');
     await fs.promises.writeFile(path.join(projectRoot, 'scripts', 'runtime.js'), 'module.exports = 1;');
+    await fs.promises.writeFile(path.join(projectRoot, 'scripts', 'background-job-history.js'), 'module.exports = {};');
     await fs.promises.writeFile(path.join(projectRoot, 'scripts', 'runtime.test.js'), 'test secret');
     await fs.promises.mkdir(path.join(projectRoot, 'scripts', 'backup'), { recursive: true });
     await fs.promises.writeFile(
@@ -314,6 +321,8 @@ test('one signed release package carries verified installer files and update fil
     assert.ok(installationFiles.includes('.env.example'));
     assert.ok(installationFiles.includes('server.js'));
     assert.ok(installationFiles.includes('version.json'));
+    assert.ok(installationFiles.includes('schema.sql'));
+    assert.ok(installationFiles.includes('scripts/background-job-history.js'));
     assert.ok(!installationFiles.includes('.env'));
     assert.ok(!installationFiles.some(file => file.startsWith('update_zips/')));
     assert.ok(!installationFiles.some(file => file.startsWith('releases/')));
@@ -334,11 +343,15 @@ test('one signed release package carries verified installer files and update fil
     const pkg = await verifyUpdatePackage(packagePath, trustedPublicKey);
     assert.equal(pkg.version, '1.0.1');
     assert.ok(pkg.files.some(file => file.path === 'server.js'));
+    assert.ok(pkg.files.some(file => file.path === 'scripts/background-job-history.js'));
+    assert.ok(pkg.migrations.some(migration => migration.path === '20261123-background-job-history.sql'));
     assert.ok(!pkg.files.some(file => file.path === 'version.json'));
     assert.ok(pkg.files.some(file => file.path === 'pterodactyl-start.js'));
     assert.ok(pkg.installation.some(file => file.path === '.env.example'));
     assert.ok(pkg.installation.some(file => file.path === 'version.json'));
     assert.ok(pkg.installation.some(file => file.path === 'schema.sqlite.sql'));
+    assert.ok(pkg.installation.some(file => file.path === 'schema.sql'));
+    assert.ok(pkg.installation.some(file => file.path === 'scripts/background-job-history.js'));
     assert.ok(pkg.installation.some(file => file.path === 'pterodactyl-start.js'));
     assert.ok(pkg.installation.some(file => file.path === 'scripts/default-theme/settings.json'));
     assert.ok(pkg.installation.some(file => file.path === 'scripts/default-theme/theme.css'));
@@ -378,6 +391,7 @@ test('a legacy-signed bridge package installs the next trusted update key', asyn
 
     await fs.promises.mkdir(path.join(projectRoot, 'public'), { recursive: true });
     await fs.promises.mkdir(path.join(projectRoot, 'scripts'), { recursive: true });
+    await fs.promises.mkdir(path.join(projectRoot, 'migrations'), { recursive: true });
     await fs.promises.writeFile(
       signingKeyPath,
       legacyPrivateKey.export({ type: 'pkcs8', format: 'pem' }),
@@ -387,6 +401,10 @@ test('a legacy-signed bridge package installs the next trusted update key', asyn
     await fs.promises.writeFile(
       path.join(projectRoot, 'scripts', 'update-public-key.js'),
       `module.exports = '${nextTrustedKey}';\n`,
+    );
+    await fs.promises.writeFile(
+      path.join(projectRoot, 'migrations', '20261123-background-job-history.sql'),
+      'CREATE TABLE IF NOT EXISTS background_job_history (id BIGINT NOT NULL PRIMARY KEY);',
     );
 
     const packagePath = await createReleasePackage({
