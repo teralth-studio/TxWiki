@@ -3936,7 +3936,7 @@ app.get('/api/admin/logs', auth, requirePermission('logs.view'), async (req, res
     next(error);
   }
 });
-app.get('/api/admin/jobs', auth, requirePermission('admin.view'), async (req, res, next) => {
+app.get('/api/admin/jobs', auth, requirePermission('logs.view'), async (req, res, next) => {
   try {
     const rawPage = req.query.page === undefined ? '1' : String(req.query.page),
       pageNumber = Number(rawPage),

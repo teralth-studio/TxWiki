@@ -287,9 +287,9 @@ test('activity logs search only on click and paginate ten records at a time', as
   await expect(page.locator('#auditLogRows')).toContainText('Enabled CAPTCHA verification with Cloudflare Turnstile.');
 });
 
-test('Jobs is available in the admin panel to admin.view roles', async ({ page }) => {
+test('Jobs is available beside Logs to roles with logs.view', async ({ page }) => {
   await page.route('**/api/auth/me', route => route.fulfill({
-    json: { user: { username: 'Editor', permissions: ['admin.view', 'pages.create_edit'] }, csrfToken: 'test' },
+    json: { user: { username: 'Editor', permissions: ['admin.view', 'pages.create_edit', 'logs.view'] }, csrfToken: 'test' },
   }));
   await page.route('**/api/admin/jobs**', route => route.fulfill({ json: {
     jobs: [{ id: 123, status: 'queued', category: 'SMTP', action: 'Send email', createdAt: '2026-11-23T10:00:00Z', errorCode: null }],
@@ -308,9 +308,9 @@ test('administration navigation respects permissions', async ({ page }) => {
       json: { user: { username: 'Editor', permissions: ['admin.view', 'pages.create_edit'] }, csrfToken: 'test' },
     }));
     await page.goto(`${origin}/admin`);
-    await expect(page.locator('#adminNavigation [data-tab]')).toHaveCount(2);
+    await expect(page.locator('#adminNavigation [data-tab]')).toHaveCount(1);
     await expect(page.locator('#adminNavigation [data-tab="pages"]')).toBeVisible();
-    await expect(page.locator('#adminNavigation [data-tab="jobs"]')).toBeVisible();
+    await expect(page.locator('#adminNavigation [data-tab="jobs"]')).toHaveCount(0);
     await expect(page.locator('#adminNavigation [data-tab="users"]')).toHaveCount(0);
 });
 
