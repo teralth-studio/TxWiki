@@ -10,7 +10,7 @@ test('background worker processes a claimed mail job and records delivery failur
   const end = source.indexOf('\nfunction startBackgroundJobWorker()', start);
   assert.ok(start >= 0 && end > start);
   for (const fail of [false, true]) {
-    const calls = [], messages = [], errors = [];
+    const calls = [], messages = [], errors = [], historyUpdates = [];
     const job = { id: 17, job_type: 'mail', payload: 'encrypted', attempts: 1 };
     const context = {
       crypto: { randomUUID: () => 'test-lock' },
@@ -28,6 +28,7 @@ test('background worker processes a claimed mail job and records delivery failur
         messages.push(args);
         if (fail) throw Object.assign(new Error('delivery failure'), { code: 'ETIMEDOUT' });
       },
+      updateJobHistory: async (...args) => historyUpdates.push(args),
       console: { error: (...args) => errors.push(args.join(' ')) },
       setInterval: () => ({ unref() {} }),
       clearInterval() {},
@@ -41,9 +42,11 @@ test('background worker processes a claimed mail job and records delivery failur
       assert.ok(retry);
       assert.equal(retry.params[0], 'queued');
       assert.equal(retry.params[3], 'ETIMEDOUT');
+      assert.deepEqual(historyUpdates, [[17, 'running'], [17, 'queued', null]]);
       assert.match(errors[0], /ETIMEDOUT/);
     } else {
       assert.ok(calls.some(call => call.sql.includes("SET status='done',payload=NULL")));
+      assert.deepEqual(historyUpdates, [[17, 'running'], [17, 'success']]);
       assert.equal(errors.length, 0);
     }
   }
