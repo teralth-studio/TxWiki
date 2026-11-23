@@ -130,6 +130,18 @@ CREATE TABLE IF NOT EXISTS background_jobs (
   KEY idx_background_jobs_expiry (status, locked_until, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS background_job_history (
+  id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+  status ENUM('queued','running','success','error') NOT NULL DEFAULT 'queued',
+  category VARCHAR(40) NOT NULL,
+  action VARCHAR(120) NOT NULL,
+  error_code VARCHAR(100) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_background_job_history_status_date (status, created_at, id),
+  KEY idx_background_job_history_category_date (category, created_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS rate_limit_buckets (
   bucket_key CHAR(64) NOT NULL PRIMARY KEY,
   total_hits INT UNSIGNED NOT NULL,

@@ -138,6 +138,18 @@ CREATE TABLE IF NOT EXISTS background_jobs (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   completed_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS background_job_history (
+  id INTEGER PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','success','error')),
+  category TEXT NOT NULL,
+  action TEXT NOT NULL,
+  error_code TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_background_job_history_status_date ON background_job_history(status,created_at,id);
+CREATE INDEX IF NOT EXISTS idx_background_job_history_category_date ON background_job_history(category,created_at,id);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_claim ON background_jobs(status,available_at,id);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_expiry ON background_jobs(status,locked_until,id);
 

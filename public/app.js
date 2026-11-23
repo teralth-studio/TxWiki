@@ -386,7 +386,7 @@ const pathParts = () => {
     return ['__invalid_path__', 'not-found'];
   }
 };
-const adminTabKeys = ['pages', 'categories', 'header-links', 'settings', 'spaces', 'languages', 'users', 'roles', 'proxy', 'smtp', 'backups', 'captcha', 'logs', 'themes', 'updates'];
+const adminTabKeys = ['pages', 'categories', 'header-links', 'settings', 'spaces', 'languages', 'users', 'roles', 'proxy', 'smtp', 'backups', 'captcha', 'logs', 'jobs', 'themes', 'updates'];
 function adminUrl(tab = 'pages', space = state.space) {
   const section = adminTabKeys.includes(tab) ? tab : 'pages';
   if ((space || 'main') === 'main')
@@ -2256,6 +2256,7 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
       ],
       ['captcha', t('Captcha', 'Captcha'), ['captcha.configure']],
       ['logs', t('Registros', 'Logs'), ['logs.view']],
+      ['jobs', t('Trabajos', 'Jobs'), ['logs.view']],
       ['themes', t('Temas', 'Themes'), ['themes.manage']],
       ['updates', t('Update', 'Update'), ['updates.install']],
     ],
@@ -2278,7 +2279,7 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
   const icons = {
     pages: 'file-lines', categories: 'folder-tree', 'header-links': 'link', settings: 'sliders', spaces: 'layer-group', languages: 'language',
     users: 'users', roles: 'user-shield', proxy: 'network-wired', smtp: 'envelope',
-    backups: 'database', captcha: 'shield-halved', logs: 'clipboard-list', themes: 'palette', updates: 'cloud-arrow-up',
+    backups: 'database', captcha: 'shield-halved', logs: 'clipboard-list', jobs: 'gears', themes: 'palette', updates: 'cloud-arrow-up',
   };
   const navigation = $('#adminNavigation');
   navigation.setAttribute('aria-label', t('Administración', 'Administration'));
@@ -2304,6 +2305,7 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
     if (tab === 'captcha') await captchaTab(content);
     if (tab === 'backups') await backupsTab(content);
     if (tab === 'logs') await logsTab(content);
+    if (tab === 'jobs') await jobsTab(content);
     if (tab === 'themes') await themesTab(content);
     if (tab === 'updates') {
       const updatesModule = await loadAdminUpdatesModule();
@@ -3412,6 +3414,93 @@ async function logsTab(root) {
     const button = event.target.closest('[data-log-page]');
     if (!button || button.disabled) return;
     try { await load(Number(button.dataset.logPage)); } catch (error) { showError($('#adminPanel'), error); }
+  };
+  try { await load(1); } catch (error) { showError($('#adminPanel'), error); }
+}
+async function jobsTab(root) {
+  root.innerHTML = `<section class="admin-section audit-log-section jobs-section"><div class="audit-log-heading"><div><h2>${t('Trabajos del servidor', 'Server jobs')}</h2><p>${t('Consulta los trabajos de la cola del servidor y su estado. Se muestran 10 trabajos por página.', 'Review server queue jobs and their status. Each page shows 10 jobs.')}</p></div><div class="audit-log-search"><label class="sr-only" for="jobsSearch">${t('Buscar por ID, estado, categoría o acción', 'Search by ID, status, category, or action')}</label><input class="settings-input" id="jobsSearch" type="search" maxlength="100" placeholder="${t('Buscar trabajos', 'Search jobs')}"><button class="primary-button" id="jobsSearchButton" type="button" aria-label="${t('Buscar trabajos', 'Search jobs')}"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i></button></div></div><div class="audit-log-count" id="jobsCount" aria-live="polite"></div><div class="audit-log-table-wrap"><table class="audit-log-table jobs-table"><thead><tr><th scope="col">ID</th><th scope="col">${t('Fecha y hora', 'Date and time')}</th><th scope="col">${t('Estado', 'Status')}</th><th scope="col">${t('Categoría', 'Category')}</th><th scope="col">${t('Acción', 'Action')}</th><th scope="col">${t('Ver', 'View')}</th></tr></thead><tbody id="jobsRows"></tbody></table></div><nav class="audit-log-pagination" id="jobsPagination" aria-label="${t('Páginas de trabajos', 'Job pages')}"></nav></section>`;
+  const searchInput = $('#jobsSearch', root),
+    rows = $('#jobsRows', root),
+    pager = $('#jobsPagination', root),
+    count = $('#jobsCount', root);
+  let currentPage = 1,
+    totalPages = 1,
+    searchTerm = '';
+  const renderPager = () => {
+    const numbers = totalPages <= 7
+      ? Array.from({ length: totalPages }, (_, index) => index + 1)
+      : currentPage <= 3
+        ? [1, 2, 3, '…', totalPages - 2, totalPages - 1, totalPages]
+        : currentPage === 4
+          ? [1, 2, 3, 4, '…', totalPages - 2, totalPages - 1, totalPages]
+          : currentPage >= totalPages - 3
+            ? [1, 2, 3, '…', totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
+            : [1, '…', currentPage - 1, currentPage, currentPage + 1, '…', totalPages - 2, totalPages - 1, totalPages];
+    const control = (label, target, disabled) => `<button type="button" class="secondary-button" data-job-page="${target}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+    pager.innerHTML = control(t('Inicio', 'Start'), 1, currentPage === 1) +
+      control(t('Anterior', 'Previous'), currentPage - 1, currentPage === 1) +
+      numbers.map((number) => number === '…'
+        ? '<span aria-hidden="true">…</span>'
+        : `<button type="button" class="secondary-button${number === currentPage ? ' active' : ''}" data-job-page="${number}"${number === currentPage ? ' aria-current="page"' : ''}>${number}</button>`).join('') +
+      control(t('Siguiente', 'Next'), currentPage + 1, currentPage === totalPages) +
+      control(t('Fin', 'End'), totalPages, currentPage === totalPages);
+  };
+  const statusName = (status) => ({
+    success: t('Success', 'Success'), queued: t('Queued', 'Queued'), error: t('Error', 'Error'), running: t('Running', 'Running'),
+  })[status] || t('Desconocido', 'Unknown');
+  const formatCategory = (category) => category === 'Backups' ? t('Copias de seguridad', 'Backups') : category;
+  const formatAction = (action) => ({
+    'Send email': t('Enviar correo', 'Send email'),
+    'Create scheduled backup': t('Crear copia de seguridad programada', 'Create scheduled backup'),
+    'Create manual backup': t('Crear copia de seguridad manual', 'Create manual backup'),
+    'Create backup': t('Crear copia de seguridad', 'Create backup'),
+    'Execute system task': t('Ejecutar tarea del sistema', 'Execute system task'),
+  })[action] || t('Ejecutar trabajo del servidor', 'Run server job');
+  const load = async (page = currentPage) => {
+    const result = await api(`/api/admin/jobs?page=${page}&search=${encodeURIComponent(searchTerm)}`);
+    currentPage = result.page;
+    totalPages = Math.max(1, Number(result.totalPages) || 1);
+    count.textContent = t(`${result.total} trabajos`, `${result.total} jobs`);
+    rows.innerHTML = result.jobs.length
+      ? result.jobs.map((job) => {
+          const date = new Date(job.createdAt),
+            formattedDate = Number.isNaN(date.getTime())
+              ? t('Fecha no disponible', 'Date unavailable')
+              : new Intl.DateTimeFormat(state.lang === 'es' ? 'es-EC' : 'en-US', {
+                  dateStyle: 'medium', timeStyle: 'short', timeZone: result.timeZone || 'America/Guayaquil',
+                }).format(date),
+            viewButton = job.status === 'error'
+              ? `<button type="button" class="jobs-view-error" data-job-error="${esc(job.errorCode || 'JOB_FAILED')}" aria-label="${t('Ver detalle del error del trabajo', 'View job error details')}" title="${t('Ver detalle', 'View details')}"><i class="fa-regular fa-eye"></i></button>`
+              : '';
+          return `<tr><td>${Number(job.id)}</td><td><time datetime="${esc(job.createdAt)}">${esc(formattedDate)}</time></td><td><span class="job-status-badge job-status-${esc(job.status)}">${esc(statusName(job.status))}</span></td><td>${esc(formatCategory(job.category))}</td><td>${esc(formatAction(job.action))}</td><td>${viewButton}</td></tr>`;
+        }).join('')
+      : `<tr><td class="audit-log-empty" colspan="6">${t('No hay trabajos para mostrar.', 'No jobs to display.')}</td></tr>`;
+    renderPager();
+  };
+  const showJobError = (code) => {
+    const safeCode = /^[A-Z][A-Z0-9_]{1,99}$/.test(code) ? code : 'JOB_FAILED';
+    return Swal.fire({
+      icon: 'error',
+      title: t('El trabajo falló', 'Job failed'),
+      html: `<p>${t('El servidor no pudo completar el trabajo. Se ocultan los datos internos por seguridad.', 'The server could not complete this job. Internal data is hidden for security.')}</p><p>${t('Código de error:', 'Error code:')} <code>${esc(safeCode)}</code></p>`,
+      confirmButtonText: t('Cerrar', 'Close'),
+    });
+  };
+  $('#jobsSearchButton', root).onclick = async () => {
+    searchTerm = searchInput.value.trim();
+    try { await load(1); } catch (error) { showError($('#adminPanel'), error); }
+  };
+  searchInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') event.preventDefault();
+  });
+  pager.onclick = async (event) => {
+    const button = event.target.closest('[data-job-page]');
+    if (!button || button.disabled) return;
+    try { await load(Number(button.dataset.jobPage)); } catch (error) { showError($('#adminPanel'), error); }
+  };
+  rows.onclick = (event) => {
+    const button = event.target.closest('[data-job-error]');
+    if (button) showJobError(button.dataset.jobError);
   };
   try { await load(1); } catch (error) { showError($('#adminPanel'), error); }
 }

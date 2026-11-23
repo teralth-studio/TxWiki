@@ -10239,6 +10239,67 @@ body.wiki-mode .shell:has(#articleWrap:not([hidden])) .sidebar .nav-group-title:
   padding-inline: 3px;
   color: var(--muted);
 }
+.jobs-table {
+  min-width: 820px;
+}
+.jobs-table td:nth-child(3),
+.jobs-table td:nth-child(4),
+.jobs-table td:nth-child(5),
+.jobs-table td:nth-child(6) {
+  color: var(--text);
+  font-weight: 500;
+}
+.job-status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 25px;
+  padding: 3px 9px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+.job-status-success {
+  color: #17814f;
+  background: color-mix(in srgb, #22a465 13%, transparent);
+}
+.job-status-queued {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+}
+.job-status-error {
+  color: #c43c46;
+  background: color-mix(in srgb, #e5484d 13%, transparent);
+}
+.job-status-running {
+  color: #a56807;
+  background: color-mix(in srgb, #e5a11a 16%, transparent);
+}
+.jobs-view-error {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+}
+.jobs-view-error {
+  cursor: pointer;
+  transition: background-color .16s ease, border-color .16s ease, transform .16s ease;
+}
+.jobs-view-error:hover {
+  border-color: var(--accent);
+  background: var(--panel-raised);
+  transform: translateY(-1px);
+}
+.jobs-view-error:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .theme-admin-intro {
   margin-bottom: 22px;
   padding: 24px;

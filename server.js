@@ -283,6 +283,7 @@ const expectedTables = [
   'sessions',
   'roles',
   'background_jobs',
+  'background_job_history',
   'rate_limit_buckets',
   'admin_logs',
 ];
@@ -721,6 +722,9 @@ async function applySchema() {
       throw error;
     }
   }
+  await pool.query(
+    "INSERT IGNORE INTO background_job_history (id,status,category,action,error_code,created_at,updated_at) SELECT id,CASE status WHEN 'queued' THEN 'queued' WHEN 'processing' THEN 'running' WHEN 'done' THEN 'success' ELSE 'error' END,CASE job_type WHEN 'mail' THEN 'SMTP' WHEN 'backup' THEN 'Backups' ELSE 'System' END,CASE job_type WHEN 'mail' THEN 'Send email' WHEN 'backup' THEN 'Create backup' ELSE 'Execute system task' END,CASE WHEN status='failed' THEN 'JOB_FAILED' ELSE NULL END,created_at,COALESCE(completed_at,created_at) FROM background_jobs",
+  );
   for (const statement of activeDatabaseType === 'mysql' ? schemaIndexStatements : []) {
     try {
       await pool.query(statement);
@@ -1374,12 +1378,42 @@ function decryptJobPayload(value) {
     Buffer.concat([decipher.update(Buffer.from(data, 'base64url')), decipher.final()]).toString('utf8'),
   );
 }
+function describeJob(type, dedupeKey = null) {
+  if (type === 'mail') return { category: 'SMTP', action: 'Send email' };
+  if (type === 'backup')
+    return {
+      category: 'Backups',
+      action: String(dedupeKey || '').startsWith('scheduled-backup:')
+        ? 'Create scheduled backup'
+        : String(dedupeKey || '').startsWith('manual-backup:')
+          ? 'Create manual backup'
+          : 'Create backup',
+    };
+  return { category: 'System', action: 'Execute system task' };
+}
+function safeJobErrorCode(error) {
+  const code = String(error?.code || 'JOB_FAILED');
+  return /^[A-Z][A-Z0-9_]{1,99}$/.test(code) ? code : 'JOB_FAILED';
+}
+async function updateJobHistory(id, status, errorCode = null) {
+  await pool.execute(
+    'UPDATE background_job_history SET status=?,error_code=?,updated_at=UTC_TIMESTAMP() WHERE id=?',
+    [status, status === 'error' ? safeJobErrorCode({ code: errorCode }) : null, id],
+  );
+}
 async function enqueueJob(type, payload = null, dedupeKey = null, executor = pool) {
   const encrypted = payload === null ? null : encryptJobPayload(payload);
   const [result] = await executor.execute(
     'INSERT IGNORE INTO background_jobs (job_type,dedupe_key,payload) VALUES (?,?,?)',
     [type, dedupeKey, encrypted],
   );
+  if (Number(result.affectedRows) > 0) {
+    const { category, action } = describeJob(type, dedupeKey);
+    await executor.execute(
+      "INSERT INTO background_job_history (id,status,category,action) VALUES (?,'queued',?,?)",
+      [result.insertId, category, action],
+    );
+  }
   return Number(result.affectedRows) > 0;
 }
 async function enqueueMail(to, subject, html, executor = pool) {
@@ -1727,7 +1761,7 @@ async function createBackup(onProgress = () => {}) {
       timezone: backupTimeZone,
       tables: {},
     };
-    const volatileTables = new Set(['sessions', 'account_tokens', 'rate_limit_buckets', 'background_jobs', 'txwiki_locks']);
+    const volatileTables = new Set(['sessions', 'account_tokens', 'rate_limit_buckets', 'background_jobs', 'background_job_history', 'txwiki_locks']);
     const persistentTables = tables.filter((row) => !volatileTables.has(row.TABLE_NAME));
     for (const [index, row] of persistentTables.entries()) {
       const tableName = row.TABLE_NAME;
@@ -1851,6 +1885,9 @@ async function pumpBackgroundJobs() {
     }
     job = claimedJob;
     if (!job) throw new Error('CLAIMED_JOB_NOT_FOUND');
+    await updateJobHistory(job.id, 'running').catch((error) =>
+      console.error('Could not record job start:', error.code || error.name || 'Error'),
+    );
     leaseTimer = setInterval(
       () =>
         pool
@@ -1876,6 +1913,9 @@ async function pumpBackgroundJobs() {
       "UPDATE background_jobs SET status='done',payload=NULL,locked_until=NULL,lock_token=NULL,last_error=NULL,completed_at=UTC_TIMESTAMP() WHERE id=? AND lock_token=?",
       [job.id, lockToken],
     );
+    await updateJobHistory(job.id, 'success').catch((error) =>
+      console.error('Could not record job completion:', error.code || error.name || 'Error'),
+    );
   } catch (error) {
     if (job) {
       const attempts = Number(job.attempts) || 1,
@@ -1896,6 +1936,9 @@ async function pumpBackgroundJobs() {
         .catch((updateError) =>
           console.error('Could not reschedule a job:', updateError.code || updateError.name || 'Error'),
         );
+      await updateJobHistory(job.id, terminal ? 'error' : 'queued', terminal ? error.code : null).catch((updateError) =>
+        console.error('Could not record job failure:', updateError.code || updateError.name || 'Error'),
+      );
       console.error(
         '[Teralth Wiki] Background job failed',
         JSON.stringify({
@@ -2126,7 +2169,7 @@ async function restoreDatabaseSnapshot(snapshot) {
         );
       }
     }
-    for (const table of ['sessions', 'account_tokens', 'rate_limit_buckets', 'background_jobs'])
+    for (const table of ['sessions', 'account_tokens', 'rate_limit_buckets', 'background_jobs', 'background_job_history'])
       await connection.query('DELETE FROM ??', [table]);
     if (activeDatabaseType === 'sqlite') await connection.query('DELETE FROM txwiki_locks');
     await connection.commit();
@@ -3890,6 +3933,31 @@ app.get('/api/admin/logs', auth, requirePermission('logs.view'), async (req, res
         [search, search, search, search, offset],
       );
     res.set('Cache-Control', 'private, no-store').json({ logs, page, total, totalPages });
+  } catch (error) {
+    next(error);
+  }
+});
+app.get('/api/admin/jobs', auth, requirePermission('logs.view'), async (req, res, next) => {
+  try {
+    const rawPage = req.query.page === undefined ? '1' : String(req.query.page),
+      pageNumber = Number(rawPage),
+      search = String(req.query.search || '').trim().slice(0, 100);
+    if (!/^\d{1,7}$/.test(rawPage) || !Number.isSafeInteger(pageNumber) || pageNumber < 1)
+      return res.status(400).json({ error: 'Selecciona una página válida.' });
+    const searchable = "LOCATE(LOWER(?),LOWER(status))>0 OR LOCATE(LOWER(?),LOWER(category))>0 OR LOCATE(LOWER(?),LOWER(action))>0",
+      numericId = /^\d+$/.test(search),
+      where = search ? `(${numericId ? 'id=? OR ' : ''}${searchable})` : '1=1',
+      params = search ? [...(numericId ? [Number(search)] : []), search, search, search] : [],
+      [count] = await query(`SELECT COUNT(*) AS total FROM background_job_history WHERE ${where}`, params),
+      total = Number(count?.total || 0),
+      totalPages = Math.max(1, Math.ceil(total / 10)),
+      page = Math.min(pageNumber, totalPages),
+      offset = (page - 1) * 10,
+      jobs = await query(
+        `SELECT id,status,category,action,CASE WHEN status='error' THEN error_code ELSE NULL END AS errorCode,DATE_FORMAT(created_at,'%Y-%m-%dT%H:%i:%sZ') AS createdAt FROM background_job_history WHERE ${where} ORDER BY created_at DESC,id DESC LIMIT 10 OFFSET ?`,
+        [...params, offset],
+      );
+    res.set('Cache-Control', 'private, no-store').json({ jobs, page, total, totalPages, timeZone: backupTimeZone });
   } catch (error) {
     next(error);
   }
