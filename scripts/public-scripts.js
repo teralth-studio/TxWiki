@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { obfuscate } = require('js-confuser');
 const { minify } = require('html-minifier-terser');
 const lightningcss = require('lightningcss');
@@ -87,6 +88,11 @@ async function compiledAsset(file, type) {
   return cache.get(key).compilation;
 }
 
+async function appScriptVersion() {
+  const source = await fs.promises.readFile(path.join(publicRoot, 'app.js'));
+  return crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
+}
+
 function sendPublicHtml(file, transformHtml) {
   if (![...documents.values()].includes(file)) throw new Error('Unknown public HTML file');
   return async (req, res, next) => {
@@ -100,6 +106,15 @@ function sendPublicHtml(file, transformHtml) {
           if (Number.isInteger(transformed.status) && transformed.status >= 100 && transformed.status <= 599)
             res.status(transformed.status);
         }
+      }
+      if (file === 'index.html') {
+        const version = await appScriptVersion();
+        let replaced = false;
+        body = body.replace(/src=(['"])\/app\.js(?:\?[^'"]*)?\1/i, (_match, quote) => {
+          replaced = true;
+          return `src=${quote}/app-${version}.js${quote}`;
+        });
+        if (!replaced) throw new Error('The public page template is missing its app script.');
       }
       res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
       return res.type('html').send(body);
@@ -151,6 +166,18 @@ function publicScripts(req, res, next) {
   }
   if (invalidStaticPath(pathname)) return next();
   const key = pathname.toLowerCase();
+  const versionedApp = key.match(/^\/app-([a-f0-9]{16})\.js$/);
+  if (versionedApp) {
+    return (async () => {
+      const version = await appScriptVersion(),
+        body = await compiledAsset('app.js', 'js');
+      res.set(
+        'Cache-Control',
+        versionedApp[1] === version ? 'public, max-age=31536000, immutable' : 'no-store, no-cache, must-revalidate',
+      );
+      return res.type('js').send(body);
+    })().catch(next);
+  }
   if (key === '/vendor/prism/prism.js') {
     if (!cache.has('prism-bundle')) {
       const compilation = prismBundle().then(source => obfuscateScript(source));

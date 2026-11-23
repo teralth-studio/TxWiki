@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -980,7 +981,8 @@ test('all public JavaScript is obfuscated and source files and maps are not serv
       assert.match(response.headers.get('content-type'), /text\/html/);
       assert.match(response.headers.get('cache-control'), /no-store/);
       assert.ok(Buffer.byteLength(body) < Buffer.byteLength(source), url);
-      assert.ok(body.includes(`src="${script}"`), url);
+      if (script === '/app.js') assert.match(body, /src="\/app-[a-f0-9]{16}\.js"/, url);
+      else assert.ok(body.includes(`src="${script}"`), url);
       if (file === 'installer.html') assert.match(body, /href="\/installer\.css"/);
       assert.doesNotMatch(body, /(?:src|href)="[^"]*\?v=/);
       assert.equal(fs.readFileSync(path.join(__dirname, '..', '..', 'public', file), 'utf8'), source);
@@ -989,7 +991,16 @@ test('all public JavaScript is obfuscated and source files and maps are not serv
       assert.equal((await fetch(origin + url)).status, 404, url);
     }
     const index = await (await fetch(origin + '/index.html')).text();
-    assert.match(index, /src="\/app\.js"/);
+    const versionedAppPath = index.match(/src="(\/app-[a-f0-9]{16}\.js)"/)?.[1];
+    assert.ok(versionedAppPath);
+    const versionedAppResponse = await fetch(origin + versionedAppPath);
+    assert.equal(versionedAppResponse.status, 200);
+    assert.equal(versionedAppResponse.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+    const appSource = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'app.js'));
+    assert.equal(
+      versionedAppPath,
+      `/app-${crypto.createHash('sha256').update(appSource).digest('hex').slice(0, 16)}.js`,
+    );
     assert.doesNotMatch(index, /src="\/admin-updates\.js"/);
     assert.equal((await fetch(origin + '/app.js', { method: 'POST' })).status, 404);
     assert.equal((await fetch(origin + '/styles.css', { method: 'POST' })).status, 404);
