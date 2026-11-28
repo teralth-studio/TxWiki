@@ -164,10 +164,6 @@ function sendPublicHtml(file, transformHtml) {
         }
       }
       if (file === 'index.html') {
-        // Both resources are already embedded in the compiled application assets.
-        body = body
-          .replace(/<link\b[^>]*href=(['"])\/errors\.css\1[^>]*>/i, '')
-          .replace(/<script\b[^>]*src=(['"])\/error-screen\.js\1[^>]*>\s*<\/script>/i, '');
         const version = await appScriptVersion();
         let replaced = false;
         body = body.replace(/src=(['"])\/app\.js(?:\?[^'"]*)?\1/i, (_match, quote) => {

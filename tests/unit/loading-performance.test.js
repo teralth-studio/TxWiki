@@ -45,6 +45,8 @@ test('prepared assets negotiate compression, retain validators across encodings,
   assert.deepEqual(plain.body, identity.body);
   const html = (await request('/')).body.toString();
   assert.doesNotMatch(html, /(?:src|href)=["']\/(?:error-screen\.js|errors\.css)/);
+  const template = fs.readFileSync(require.resolve('../../public/index.html'), 'utf8');
+  assert.doesNotMatch(template, /(?:src|href)=["']\/(?:error-screen\.js|errors\.css)/);
   assert.match(html, /src=["']\/app-[a-f0-9]{16}\.js/);
 });
 

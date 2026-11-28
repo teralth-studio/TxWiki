@@ -38,13 +38,9 @@ test.beforeAll(async () => {
   app.use('/languages', express.static(path.join(process.cwd(), 'languages')));
   app.use('/vendor/prism', express.static(path.join(process.cwd(), 'node_modules', 'prismjs')));
   app.use('/vendor/fontawesome', express.static(path.join(process.cwd(), 'node_modules', '@fortawesome', 'fontawesome-free')));
-  app.get('/production-errors', sendPublicHtml('index.html', html => html
-    .replace(/<script\b[^>]*src="\/error-screen\.js"[^>]*><\/script>/g, '')
-    .replace(/<link\b[^>]*href="\/errors\.css"[^>]*>/g, '')));
-  app.use((req,res,next) => {
-    if (req.path.startsWith('/app-') || req.get('referer')?.includes('/production-errors')) return publicScripts(req,res,()=>publicStaticOnly(req,res,next));
-    next();
-  });
+  app.get('/production-errors', sendPublicHtml('index.html'));
+  // Exercise the same bundled JS/CSS as production, including terminal errors.
+  app.use(publicScripts, publicStaticOnly);
   app.use(express.static(path.join(process.cwd(), 'public')));
   app.get(/^\/admin(?:\/.*)?$/, (req, res) => res.sendFile(path.join(process.cwd(), 'public', 'index.html')));
   await new Promise(resolve => { server = app.listen(0, '127.0.0.1', resolve); });
