@@ -24,10 +24,13 @@ test.beforeAll(async () => {
   }));
   app.get('/api/pages/:slug', (req, res) => res.json({ page: pageData, reactions: [] }));
   app.put('/api/admin/pages/:slug', (req, res) => res.json({ ok: true, slug: req.params.slug, space: 'main' }));
+  app.get('/api/admin/categories', (req, res) => res.json({ categories: [] }));
+  app.get('/api/admin/pages', (req,res) => res.json({ pages: [pageData], categories: [], homePageSlug: 'home' }));
+  app.get('/api/admin/pages/:slug', (req,res) => res.json({ page: pageData }));
   app.use('/languages', express.static(path.join(process.cwd(), 'languages')));
   app.use('/vendor/prism', express.static(path.join(process.cwd(), 'node_modules', 'prismjs')));
   app.use('/vendor/fontawesome', express.static(path.join(process.cwd(), 'node_modules', '@fortawesome', 'fontawesome-free')));
-  app.get(/^\/admin(?:\/.*)?$/, (req, res) => res.sendFile(path.join(process.cwd(), 'public', 'index.html')));
+  app.get(/^\/(?:admin|profile)(?:\/.*)?$/, (req, res) => res.sendFile(path.join(process.cwd(), 'public', 'index.html')));
   app.use(express.static(path.join(process.cwd(), 'public')));
   await new Promise(resolve => { server = app.listen(0, '127.0.0.1', resolve); });
   origin = `http://127.0.0.1:${server.address().port}`;
@@ -38,6 +41,12 @@ test.afterAll(async () => {
 });
 
 test.beforeEach(async ({ page }) => {
+  await page.route('**/api/admin/dashboard', route => route.fulfill({ json: {
+    version: '1.6.5', timeZone: 'America/Guayaquil', updatePermission: false,
+    totals: { users: 8, visitors: 24, pages: 12, reactions: 33, happy: 20, neutral: 9, sad: 4 },
+    series: [{ day: '2026-11-26', users: 7, visitors: 10, pages: 11, happy: 18, neutral: 8, sad: 3 },
+      { day: '2026-11-27', users: 8, visitors: 14, pages: 12, happy: 20, neutral: 9, sad: 4 }],
+  }}));
   await page.addInitScript(() => {
     window.Swal = { fire: async () => ({ isConfirmed: true }) };
     document.cookie = 'teralth_cookie_consent=accepted; path=/';
@@ -45,7 +54,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('editor markup keeps external-link fields inert and rejects unsafe link protocols', async ({ page }) => {
-  await page.goto(`${origin}/admin`);
+  await page.goto(`${origin}/admin/pages`);
   const result = await page.evaluate(() => {
     const unsafeTitle = '<img src=x onerror=window.__editorXss=true>';
     const encoded = encodeURIComponent(unsafeTitle);
@@ -93,6 +102,171 @@ test('editor markup keeps external-link fields inert and rejects unsafe link pro
   expect(await page.evaluate(() => window.__editorXss)).toBeUndefined();
 });
 
+for (const width of [390, 768, 1440]) {
+  for (const theme of ['dark', 'light']) {
+    test(`profile settings and security stay usable at ${width}px in ${theme} mode`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.addInitScript(value => localStorage.setItem('wiki-theme', value), theme);
+      await page.route('**/api/profile', route => route.request().method() === 'GET' ? route.fulfill({ json: {
+        user: { id: 1, username: 'Admin', email: 'admin@example.test', roleName: 'Administrator', roleColor: '#36a269', createdAt: '2026-01-02T12:00:00Z', twoFactorEnabled: false },
+        profile: { fullName: 'Admin Person', preferredLanguage: 'en', loginNotifications: true, avatar: '' },
+        connections: [{ provider: 'google', name: 'Google', linked: null }],
+      } }) : route.fulfill({ json: { ok: true } }));
+      await page.goto(`${origin}/profile`);
+      await expect(page.locator('#adminPanel h1')).toHaveText('Summary');
+      await expect(page.locator('#profileContent')).toContainText('02/01/2026');
+      await page.locator('#accountLink').click();
+      await expect(page.locator('[data-user-action="profile"]')).toBeVisible();
+      await expect(page.locator('[data-user-action="password"]')).toHaveCount(0);
+      await expect(page.locator('.profile-role')).toHaveClass(/role-badge/);
+      await expect(page.locator('.profile-role')).toHaveCSS('color', 'rgb(54, 162, 105)');
+      const logout = page.locator('[data-user-action="logout"]');
+      await expect(logout).not.toHaveClass(/danger-button/);
+      await expect(logout).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+      await expect(logout).toHaveCSS('color', theme === 'light' ? 'rgb(180, 35, 50)' : 'rgb(224, 82, 96)');
+      await logout.hover();
+      await expect(logout).toHaveCSS('color', theme === 'light' ? 'rgb(180, 35, 50)' : 'rgb(224, 82, 96)');
+      await page.goto(`${origin}/profile/settings`);
+      await expect(page.locator('#profileSettings')).toBeVisible();
+      const settingsBox = await page.locator('#profileSettings').boundingBox();
+      const emailBox = await page.locator('#profileEmail').boundingBox();
+      expect(emailBox.y - settingsBox.y - settingsBox.height).toBeGreaterThanOrEqual(15);
+      await expect(page.locator('#profileSettings')).toHaveCSS('border-top-width', '1px');
+      await page.locator('#profileSettings [name=fullName]').fill('Updated Name');
+      const save = page.waitForRequest(request => request.method() === 'PUT' && request.url().endsWith('/api/profile'));
+      await page.locator('#profileSettings button[type=submit]').click();
+      expect((await save).postDataJSON().fullName).toBe('Updated Name');
+      await page.goto(`${origin}/profile/security`);
+      await expect(page.locator('#profilePassword')).toBeVisible();
+      await expect(page.locator('#profileEnable2fa')).toBeVisible();
+      const passwordBox = await page.locator('#profilePassword').boundingBox();
+      const securityBox = await page.locator('#profileContent > section').boundingBox();
+      expect(securityBox.y - passwordBox.y - passwordBox.height).toBeGreaterThanOrEqual(15);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    });
+  }
+}
+
+for (const [width, theme] of [[390, 'dark'], [1440, 'light']]) {
+  test(`profile avatar replaces initials after upload and persists at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.addInitScript(value => localStorage.setItem('wiki-theme', value), theme);
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j2ioAAAAASUVORK5CYII=', 'base64');
+    let avatar = '';
+    await page.route('**/media/aaaaaaaaaaaaaaaa.png', route => route.fulfill({ contentType: 'image/png', body: png }));
+    await page.route('**/api/profile', route => route.fulfill({ json: route.request().method() === 'GET' ? {
+      user: { id: 1, username: 'Nejeh', email: 'nejeh@example.test', roleName: 'Reader', roleColor: '#36a269', createdAt: '2026-01-02T12:00:00Z' },
+      profile: { fullName: '', preferredLanguage: 'en', loginNotifications: true, avatar }, connections: [],
+    } : { ok: true } }));
+    await page.route('**/api/profile/avatar', route => { avatar = '/media/aaaaaaaaaaaaaaaa.png'; return route.fulfill({ json: { avatar } }); });
+    await page.goto(`${origin}/profile/settings`);
+    if (width < 680) await page.locator('#openSidebar').click();
+    await expect(page.locator('.admin-brand-initials')).toHaveText('NE');
+    if (width < 680) await page.locator('#closeSidebar').click();
+    await page.locator('#profileSettings input[type=file]').setInputFiles({ name: 'avatar.png', mimeType: 'image/png', buffer: png });
+    await page.locator('#profileSettings button[type=submit]').click();
+    if (width < 680) await page.locator('#openSidebar').click();
+    await expect(page.locator('.sidebar .admin-brand-logo')).toHaveAttribute('src', '/media/aaaaaaaaaaaaaaaa.png');
+    await expect(page.locator('.admin-brand-initials')).toHaveCount(0);
+    await page.goto(`${origin}/profile`);
+    await expect(page.locator('.sidebar .admin-brand-logo')).toHaveAttribute('src', '/media/aaaaaaaaaaaaaaaa.png');
+    expect(await page.locator('link[href="/buttons.css"]').count()).toBe(0);
+  });
+}
+
+for (const width of [390, 1440]) {
+  for (const theme of ['dark', 'light']) {
+    test(`profile details and QR align at ${width}px in ${theme} mode`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.addInitScript(value => localStorage.setItem('wiki-theme', value), theme);
+      await page.route('**/api/profile', route => route.fulfill({ json: {
+        user: { id: 1, username: 'Reader', email: 'reader@example.test', roleName: 'Reader', roleColor: '#36a269', createdAt: '2026-01-02T12:00:00Z', twoFactorEnabled: false },
+        profile: { fullName: '', preferredLanguage: 'en', loginNotifications: true, avatar: '' },
+        connections: [{ provider: 'google', name: 'Google', linked: null }],
+      } }));
+      await page.route('**/api/auth/two-factor/setup', route => route.fulfill({ json: {
+        qr: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j2ioAAAAASUVORK5CYII=', secret: 'PREVIEWONLYNOTAREALSECRET',
+      } }));
+      await page.goto(`${origin}/profile`);
+      const rows = page.locator('.profile-account-details > div');
+      await expect(rows).toHaveCount(2);
+      await expect(rows.first().locator('dt')).toHaveText('Email address');
+      await expect(rows.first().locator('dd')).toHaveText('reader@example.test');
+      await expect(rows.last().locator('dd')).toHaveText('2FA disabled');
+      await page.goto(`${origin}/profile/notifications`);
+      const save = page.locator('#notificationPreferences > button');
+      await expect(save).toBeVisible();
+      expect((await save.boundingBox()).width).toBeLessThan(width < 680 ? 200 : 250);
+      await page.goto(`${origin}/profile/connections`);
+      const link = page.locator('[data-profile-provider]');
+      await expect(link).toBeVisible();
+      expect((await link.boundingBox()).width).toBeLessThan(150);
+      await page.goto(`${origin}/profile/security`);
+      await page.locator('#profileEnable2fa').click();
+      const popup = page.locator('.swal2-popup');
+      const qr = popup.locator('.two-factor-qr');
+      await expect(qr).toBeVisible();
+      const qrBox = await qr.boundingBox(), secretBox = await popup.locator('.two-factor-secret').boundingBox();
+      expect(Math.abs(qrBox.x + qrBox.width / 2 - secretBox.x - secretBox.width / 2)).toBeLessThan(2);
+      await expect(popup.locator('.two-factor-secret')).toHaveCSS('text-align', 'center');
+      await popup.locator('.swal2-cancel').click();
+    });
+  }
+}
+
+test('admin connections render masked configuration and login lists configured providers', async ({ page }) => {
+  await page.route('**/api/admin/connections', route => route.fulfill({ json: {
+    connections: [{ provider: 'google', clientId: 'public-client-id', redirectUri: 'https://wiki.test/auth/oauth/google/callback' }],
+    providers: [{ provider: 'google', name: 'Google', redirectUri: 'https://wiki.test/auth/oauth/google/callback' }],
+  } }));
+  await page.goto(`${origin}/admin/connections`);
+  await expect(page.locator('#connectionRows')).toContainText('Google');
+  await expect(page.locator('[data-edit-connection="google"]')).toBeVisible();
+  await expect(page.locator('[data-delete-connection="google"]')).toBeVisible();
+  await page.locator('[data-edit-connection="google"]').click();
+  await expect(page.locator('.swal2-popup #connectionRedirect')).toHaveValue('https://wiki.test/auth/oauth/google/callback');
+  await expect(page.locator('.swal2-popup #connectionSecret')).toHaveValue('');
+  await page.locator('.swal2-cancel').click();
+  await page.route('**/api/auth/connections', route => route.fulfill({ json: { connections: [{ provider: 'google', name: 'Google' }] } }));
+  await page.route('**/login', route => route.fulfill({ path: path.join(process.cwd(), 'public', 'index.html') }));
+  await page.goto(`${origin}/login`);
+  await expect(page.locator('[data-oauth-login="google"]')).toHaveText('Continue with Google');
+});
+
+test('admin home opens the Dashboard with grouped navigation and site overview', async ({ page }) => {
+  await page.goto(`${origin}/admin`);
+  await expect(page.locator('#adminPanel h1')).toHaveText('Dashboard');
+  await expect(page.locator('.admin-brand')).toContainText('Teralth Wiki');
+  await expect(page.locator('.admin-brand')).toBeVisible();
+  expect((await page.locator('.admin-brand').boundingBox()).y).toBeLessThan(45);
+  await expect(page.locator('#adminNavigation .admin-nav-group')).toHaveCount(6);
+  await expect(page.locator('#adminNavigation [data-tab="dashboard"]')).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('#adminTopbarContext')).toBeVisible();
+  await expect(page.locator('#adminViewWiki')).toHaveAttribute('target', '_blank');
+  await expect(page.locator('#breadcrumbs')).toContainText('Administration');
+  await expect(page.locator('.dashboard-metric')).toHaveCount(3);
+  await expect(page.locator('.dashboard-chart-panel')).toContainText('Site activity');
+  await expect(page.locator('.dashboard-chart-legend')).toBeVisible();
+  await expect(page.locator('.dashboard-reaction-total')).toHaveCount(0);
+  await expect(page.locator('#dashboardUpdateStatus')).toContainText('unavailable for this role');
+});
+
+for (const [theme, expected] of [['light', 'rgb(229, 229, 229)'], ['dark', 'rgb(32, 32, 32)']]) {
+  test(`initial loading skeleton uses the ${theme} theme palette`, async ({ page }) => {
+    await page.addInitScript((initialTheme) => localStorage.setItem('wiki-theme', initialTheme), theme);
+    await page.route('**/api/config', async route => {
+      await new Promise(resolve => setTimeout(resolve, 1600));
+      await route.continue();
+    });
+    await page.goto(`${origin}/`);
+    const skeleton = page.locator('.skeleton-block').first();
+    await expect(skeleton).toBeVisible();
+    await expect.poll(() => skeleton.evaluate(element => getComputedStyle(element).backgroundColor)).toBe(expected);
+    await expect(page.locator('#globalLoader')).toHaveCSS('background-color', theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(9, 9, 9)');
+    await expect(page.locator('.skeleton-sidebar')).toHaveCSS('background-color', theme === 'light' ? 'rgb(250, 250, 250)' : 'rgb(17, 17, 17)');
+  });
+}
+
   test('users paginate in groups of 15 and controls still work on later pages', async ({ page }) => {
     const users = Array.from({ length: 166 }, (_, i) => ({
       id: i + 1, username: `User ${i + 1}`, email: `user${i + 1}@example.test`,
@@ -106,7 +280,7 @@ test('editor markup keeps external-link fields inert and rejects unsafe link pro
       updated = route.request().url();
       return route.fulfill({ json: { ok: true } });
     });
-    await page.goto(`${origin}/admin`);
+    await page.goto(`${origin}/admin/pages`);
     await page.locator('#adminNavigation [data-tab="users"]').click();
     const pager = page.locator('.user-pagination');
     await expect(page.locator('.user-row:visible')).toHaveCount(15);
@@ -127,7 +301,7 @@ test('editor markup keeps external-link fields inert and rejects unsafe link pro
   });
 
   test('spoiler editor creates, renames, preserves nested widgets through source mode and saves', async ({ page }) => {
-    await page.goto(`${origin}/admin`);
+    await page.goto(`${origin}/admin/pages`);
     await page.locator('#pageRows .edit-page').click();
     await page.evaluate(() => {
       let spoilerPromptCount = 0;
@@ -164,7 +338,7 @@ test('editor markup keeps external-link fields inert and rejects unsafe link pro
   });
 
   test('spoiler deletion removes only the chosen block', async ({ page }) => {
-    await page.goto(`${origin}/admin`);
+    await page.goto(`${origin}/admin/pages`);
     await page.locator('#pageRows .edit-page').click();
     await page.evaluate(() => { window.Swal.fire = async () => ({ isConfirmed: true, value: 'Details' }); });
     await page.locator('#editContent').click();
@@ -176,7 +350,7 @@ test('editor markup keeps external-link fields inert and rejects unsafe link pro
   });
 
   test('spoiler title input aligns with the code block format field', async ({ page }) => {
-    await page.goto(`${origin}/admin`);
+    await page.goto(`${origin}/admin/pages`);
     await page.locator('#pageRows .edit-page').click();
     await page.locator('#editContent').click();
     await page.locator('[data-command="spoiler"]').click();
@@ -199,10 +373,10 @@ test('editor markup keeps external-link fields inert and rejects unsafe link pro
 for (const width of [1440, 390]) {
   test(`administration navigation and separate page editor at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
-    await page.goto(`${origin}/admin`);
+    await page.goto(`${origin}/admin/pages`);
     await expect(page.locator('#pageRows .edit-page')).toBeVisible();
     if (width < 680) await page.locator('#openSidebar').click();
-    await expect(page.locator('#adminNavigation [data-tab]')).toHaveCount(16);
+    await expect(page.locator('#adminNavigation [data-tab]')).toHaveCount(20);
     await expect(page.locator('#adminNavigation [data-tab="jobs"]')).toBeVisible();
     await expect(page.locator('#spacePicker')).toBeHidden();
     await expect(page.locator('#searchInput')).toBeHidden();
@@ -222,7 +396,7 @@ for (const width of [1440, 390]) {
     if (width < 680) await page.locator('#openSidebar').click({ timeout: 5000 });
     await page.locator('#adminNavigation [data-tab="pages"]').click({ timeout: 5000 });
     await page.locator('#pageRows .edit-page').click({ timeout: 5000 });
-    await expect(page.locator('#editorHeading')).toHaveText('Editing file: Home');
+    await expect(page.locator('#editorHeading')).toHaveText('Edit page: Home');
     await expect(page.locator('#sidebar')).toBeHidden();
     await expect(page.locator('#pageRows')).toBeHidden();
     await expect(page.locator('#tocLinks')).toContainText('Getting started');
@@ -232,7 +406,7 @@ for (const width of [1440, 390]) {
       expect(toc.x).toBeGreaterThan(editor.x + editor.width);
     }
     await page.locator('#editTitle').fill('Updated');
-    await expect(page.locator('#editorHeading')).toHaveText('Editing file: Updated');
+    await expect(page.locator('#editorHeading')).toHaveText('Edit page: Updated');
     const savedRequest = page.waitForRequest(request => request.method() === 'PUT' && request.url().includes('/api/admin/pages/'));
     await page.locator('#savePage').click({ timeout: 5000 });
     expect((await savedRequest).postDataJSON().titles.en).toBe('Updated');
@@ -269,7 +443,7 @@ test('activity logs search only on click and paginate ten records at a time', as
           }));
     await route.fulfill({ json: { logs, page: pageNumber, total, totalPages: Math.ceil(total / 10) } });
   });
-  await page.goto(`${origin}/admin`);
+  await page.goto(`${origin}/admin/pages`);
   await page.locator('#adminNavigation [data-tab="logs"]').click();
   await expect(page.getByRole('columnheader', { name: 'Log #' })).toBeVisible();
   await expect(page.locator('#auditLogRows tr')).toHaveCount(10);
@@ -295,7 +469,7 @@ test('Jobs is available beside Logs to roles with logs.view', async ({ page }) =
     jobs: [{ id: 123, status: 'queued', category: 'SMTP', action: 'Send email', createdAt: '2026-11-23T10:00:00Z', errorCode: null }],
     page: 1, total: 1, totalPages: 1, timeZone: 'America/Guayaquil',
   } }));
-  await page.goto(`${origin}/admin`);
+  await page.goto(`${origin}/admin/pages`);
   await page.locator('#adminNavigation [data-tab="jobs"]').click();
   await expect(page).toHaveURL(/\/admin\/jobs$/);
   await expect(page.getByRole('heading', { name: 'Server jobs' })).toBeVisible();
@@ -307,15 +481,16 @@ test('administration navigation respects permissions', async ({ page }) => {
     await page.route('**/api/auth/me', route => route.fulfill({
       json: { user: { username: 'Editor', permissions: ['admin.view', 'pages.create_edit'] }, csrfToken: 'test' },
     }));
-    await page.goto(`${origin}/admin`);
-    await expect(page.locator('#adminNavigation [data-tab]')).toHaveCount(1);
+    await page.goto(`${origin}/admin/pages`);
+    await expect(page.locator('#adminNavigation [data-tab]')).toHaveCount(2);
+    await expect(page.locator('#adminNavigation [data-tab="dashboard"]')).toBeVisible();
     await expect(page.locator('#adminNavigation [data-tab="pages"]')).toBeVisible();
     await expect(page.locator('#adminNavigation [data-tab="jobs"]')).toHaveCount(0);
     await expect(page.locator('#adminNavigation [data-tab="users"]')).toHaveCount(0);
 });
 
 test('general settings and languages retain their existing controls', async ({ page }) => {
-    await page.goto(`${origin}/admin`);
+    await page.goto(`${origin}/admin/pages`);
     await page.locator('#adminNavigation [data-tab="settings"]').click({ timeout: 5000 });
     await expect(page.locator('#siteName')).toBeVisible();
     await expect(page.locator('#saveSettings')).toBeVisible();
@@ -324,15 +499,22 @@ test('general settings and languages retain their existing controls', async ({ p
     await expect(page.locator('#saveLanguages')).toBeVisible();
 });
 
-test('administration header stays available while scrolling settings', async ({ page }) => {
+test('administration header stays inside the right column and scrolls with settings', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 700 });
-  await page.goto(`${origin}/admin`);
+  await page.goto(`${origin}/admin/pages`);
   await page.locator('#adminNavigation [data-tab="settings"]').click();
   await expect(page.locator('#siteName')).toBeVisible();
+  const header = page.locator('.topbar');
+  const headerBox = await header.boundingBox();
+  const sidebarBox = await page.locator('#sidebar').boundingBox();
+  expect(headerBox.x).toBeGreaterThanOrEqual(sidebarBox.x + sidebarBox.width);
+  await expect(header).toHaveCSS('position', 'relative');
+  await expect(header).toHaveCSS('border-radius', '0px');
   const readingArea = page.locator('.reading-layout');
   await readingArea.evaluate(element => { element.scrollTop = 500; });
   await expect.poll(() => readingArea.evaluate(element => element.scrollTop)).toBeGreaterThan(300);
-  expect(Math.abs((await page.locator('.topbar').boundingBox()).y)).toBeLessThan(1);
+  expect((await header.boundingBox()).y).toBeLessThan(headerBox.y - 300);
+  await readingArea.evaluate(element => { element.scrollTop = 0; });
   await page.locator('#accountLink').click();
   await expect(page.locator('#userMenu')).toBeVisible();
 });
@@ -342,8 +524,8 @@ for (const permission of ['settings.identity', 'settings.support', 'settings.seo
     await page.route('**/api/auth/me', route => route.fulfill({
       json: { user: { username: 'Editor', permissions: ['admin.view', permission] }, csrfToken: 'test' },
     }));
-    await page.goto(`${origin}/admin`);
-    await page.locator('#adminNavigation [data-tab="settings"]').click();
+    await page.goto(`${origin}/admin/pages`);
+    await page.locator(permission === 'settings.support' ? '#adminNavigation [data-tab="support-card"]' : '#adminNavigation [data-tab="settings"]').click();
     await expect(page.locator('#siteName')).toBeVisible({ visible: permission === 'settings.identity' });
     await expect(page.locator('#supportTitleInput')).toBeVisible({ visible: permission === 'settings.support' });
     await expect(page.locator('#seoDescription')).toBeVisible({ visible: permission === 'settings.seo' });
@@ -370,7 +552,7 @@ test('role editor groups current permissions and preserves selection on save', a
   ];
   await page.route('**/api/admin/roles', route => route.request().method() === 'GET'
     ? route.fulfill({ json: { roles } }) : route.fulfill({ json: { ok: true } }));
-  await page.goto(`${origin}/admin`);
+  await page.goto(`${origin}/admin/pages`);
   await page.locator('#adminNavigation [data-tab="roles"]').click();
   const editor = page.locator('[data-role-key="editor"]');
   await editor.locator('.edit-role').click();
@@ -394,7 +576,7 @@ test('SMTP and CAPTCHA settings keep their controls after grouping', async ({ pa
   await page.route('**/api/admin/captcha', route => route.fulfill({ json: { captcha: {
     enabled: false, provider: 'recaptcha', variant: 'v3', siteKey: '', secretConfigured: false, minScore: 0.5,
   } } }));
-  await page.goto(`${origin}/admin`);
+  await page.goto(`${origin}/admin/pages`);
   await page.locator('#adminNavigation [data-tab="smtp"]').click();
   await expect(page.getByRole('heading', { name: 'Mail server' })).toBeVisible();
   await expect(page.locator('#smtpHost')).toHaveValue('smtp.example.com');
@@ -403,6 +585,9 @@ test('SMTP and CAPTCHA settings keep their controls after grouping', async ({ pa
   await page.locator('#toggleTestEmail').click();
   await expect(page.locator('#smtpTestEmail')).toBeVisible();
   await page.locator('#adminNavigation [data-tab="captcha"]').click();
+  await expect(page.locator('#captchaProvider')).toBeHidden();
+  await expect(page.locator('#saveCaptcha')).toBeVisible();
+  await page.locator('#captchaEnabled').check();
   await expect(page.getByRole('heading', { name: 'Provider and type' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Keys' })).toBeVisible();
   await expect(page.locator('#captchaScore')).toBeVisible();
@@ -476,9 +661,14 @@ for (const width of [1440, 390]) {
 for (const width of [1440, 390]) {
   test(`identity uploads are consistent and grouped at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
-    await page.goto(`${origin}/admin`);
+    await page.goto(`${origin}/admin/pages`);
     if (width < 680) await page.locator('#openSidebar').click();
     await page.locator('#adminNavigation [data-tab="settings"]').click();
+    const nameField = await page.locator('#siteName').boundingBox();
+    const zoneField = await page.locator('#siteTimeZone').boundingBox();
+    if (width > 700) expect(Math.abs(nameField.y-zoneField.y)).toBeLessThan(2);
+    else expect(zoneField.y-nameField.y-nameField.height).toBeGreaterThanOrEqual(18);
+    expect(Math.abs(nameField.height-zoneField.height)).toBeLessThan(2);
     const logo = page.locator('#siteLogoFile'), favicon = page.locator('#faviconFile');
     const styles = async element => element.evaluate(el => {
       const style = getComputedStyle(el);
@@ -507,12 +697,18 @@ test('support translations and SEO settings are saved and applied', async ({ pag
     config = { ...config, site: { ...config.site, ...submitted } };
     return route.fulfill({ json: { ok: true } });
   });
-  await page.goto(`${origin}/admin`);
+  await page.goto(`${origin}/admin/pages`);
   await page.locator('#adminNavigation [data-tab="settings"]').click();
   await expect(page.locator('#pageTitle')).toHaveCount(0);
   await expect(page.locator('#faviconFile')).toBeVisible();
   await page.locator('#siteName').fill('Example');
   await page.locator('#sidebarLabelInput').fill('Footer label');
+  await page.locator('#seoDescription').fill('Site description');
+  await page.locator('#seoCanonical').fill('https://example.test/docs');
+  await page.locator('#seoIndexable').uncheck();
+  await page.locator('#saveSettings').click();
+  await expect.poll(() => submitted?.seo).toMatchObject({ description: 'Site description', canonicalBase: 'https://example.test/docs', indexable: false });
+  await page.locator('#adminNavigation [data-tab="support-card"]').click();
   await page.locator('#supportTitleInput').fill('Help');
   await page.locator('#supportButtonInput').fill('Contact');
   await expect(page.locator('#supportPreviewTitle')).toHaveText('Help');
@@ -532,14 +728,10 @@ test('support translations and SEO settings are saved and applied', async ({ pag
   await expect(page.locator('#supportPreviewTitle')).toHaveText('Help');
   await page.locator('#supportLanguage').selectOption('es');
   await expect(page.locator('#supportPreviewDescription')).toHaveText('Estamos aquí');
-  await page.locator('#seoDescription').fill('Site description');
-  await page.locator('#seoCanonical').fill('https://example.test/docs');
-  await page.locator('#seoIndexable').uncheck();
   await page.locator('#saveSettings').click();
-  await expect.poll(() => submitted).toBeTruthy();
+  await expect.poll(() => submitted?.support).toBeTruthy();
   expect(submitted.support.translations.en.title).toBe('Help');
   expect(submitted.support.translations.es.title).toBe('Ayuda');
-  expect(submitted.seo).toMatchObject({ description: 'Site description', canonicalBase: 'https://example.test/docs', indexable: false });
   await expect(page.locator('#footerContent')).toHaveText('Footer label');
   await expect(page.locator('#footerCopyright')).toContainText(`© ${new Date().getFullYear()} Example`);
   await expect(page.locator('#supportTitle')).toHaveText('Help');
@@ -550,9 +742,9 @@ test('support translations and SEO settings are saved and applied', async ({ pag
 for (const width of [1440, 390]) {
   test(`support preview adapts at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
-    await page.goto(`${origin}/admin`);
+    await page.goto(`${origin}/admin/pages`);
     if (width < 680) await page.locator('#openSidebar').click();
-    await page.locator('#adminNavigation [data-tab="settings"]').click();
+    await page.locator('#adminNavigation [data-tab="support-card"]').click();
     await expect(page.locator('#supportPreviewCard')).toBeVisible();
     const form = await page.locator('.support-editor-fields').boundingBox();
     const preview = await page.locator('.support-preview').boundingBox();
@@ -565,8 +757,8 @@ for (const width of [1440, 390]) {
 }
 
 test('light theme keeps the administration and editor usable', async ({ page }) => {
-  await page.goto(`${origin}/admin`);
-  await expect(page.locator('#sidebar')).toHaveCSS('background-color', 'rgb(17, 17, 19)');
+  await page.goto(`${origin}/admin/pages`);
+  await expect(page.locator('#sidebar')).toHaveCSS('background-color', 'rgb(17, 17, 17)');
   await page.locator('#themeToggle').click();
   await expect(page.locator('body')).toHaveClass(/light/);
   await expect(page.locator('#sidebar')).toHaveCSS('background-color', 'rgb(250, 250, 250)');
@@ -581,9 +773,9 @@ test('light theme keeps the administration and editor usable', async ({ page }) 
 });
 
 test('editor back confirms unsaved changes and creation keeps its fields', async ({ page }) => {
-  await page.goto(`${origin}/admin`);
+  await page.goto(`${origin}/admin/pages`);
   await page.locator('#newPage').click();
-  await expect(page.locator('#editorHeading')).toHaveText('New page');
+  await expect(page.locator('#editorHeading')).toHaveText('Create new page');
   await expect(page.locator('#editIconMode')).toBeVisible();
   await expect(page.locator('#editLanguage')).toBeVisible();
   await expect(page.locator('#editPageType')).toBeVisible();

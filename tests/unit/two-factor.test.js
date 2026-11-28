@@ -7,6 +7,7 @@ const express = require('express');
 const session = require('express-session');
 const { rateLimit } = require('express-rate-limit');
 const { createTwoFactor, registerTwoFactorRoutes, binding, sessionBinding } = require('../../scripts/two-factor');
+const { credentialBinding } = require('../../scripts/session-security');
 
 test('TOTP secrets are authenticated encrypted and tokens cannot be replayed', () => {
   const crypto = createTwoFactor('a secret used exclusively for this test');
@@ -74,7 +75,7 @@ test('setup, recovery codes, challenge binding and disable are enforced server-s
   registerTwoFactorRoutes(app, {
     pool, query: async () => [{ ...user }],
     auth: (req, res, next) => req.session.user ? next() : res.sendStatus(401),
-    limiter: rateLimit({ windowMs: 60000, limit: 12, keyGenerator: req => String(req.session.user?.id || req.session.pendingTwoFactor?.id), handler: (req, res) => res.status(429).json({ error: 'rate limited' }) }),
+    limiter: rateLimit({ windowMs: 60000, limit: 15, keyGenerator: req => String(req.session.user?.id || req.session.pendingTwoFactor?.id), handler: (req, res) => res.status(429).json({ error: 'rate limited' }) }),
     bcrypt: { compare: async password => password === 'correct' },
     sessionSecret: 'test server encryption secret',
     token: () => 'csrf',
@@ -113,8 +114,8 @@ test('setup, recovery codes, challenge binding and disable are enforced server-s
   const code = crypto.totp(setup.body.secret).generate();
   const activation = await call('/api/auth/two-factor/activate', { code }, sessionA.cookie);
   assert.equal(activation.status, 200);
-  assert.equal(activation.body.codes.length, 10);
-  assert.equal(new Set(activation.body.codes).size, 10);
+  assert.equal(activation.body.codes.length, 8);
+  assert.equal(new Set(activation.body.codes).size, 8);
   assert.notEqual(user.two_factor_secret, setup.body.secret);
   assert.ok(!user.two_factor_recovery_codes.includes(activation.body.codes[0]));
   assert.equal(invalidations.length, 1);
@@ -153,6 +154,13 @@ test('setup, recovery codes, challenge binding and disable are enforced server-s
   assert.equal(after.body.user.id, user.id);
   assert.equal(after.body.pending, false);
   assert.equal(after.body.stamp, sessionBinding(user.id, user.two_factor_secret));
+  assert.equal((await call('/api/auth/two-factor/recovery', { password: 'wrong' }, authenticated.cookie)).status, 403);
+  const regenerated = await call('/api/auth/two-factor/recovery', { password: 'correct' }, authenticated.cookie);
+  assert.equal(regenerated.status, 200);
+  assert.equal(regenerated.body.codes.length, 8);
+  assert.ok(!user.two_factor_recovery_codes.includes(regenerated.body.codes[0]));
+  const oldRecoverySession = await call('/test/pending', {});
+  assert.equal((await call('/api/auth/two-factor/verify', { code: activation.body.codes[1], recovery: true }, oldRecoverySession.cookie)).status, 400);
   const expired = await call('/test/pending', { expired: true });
   assert.equal((await call('/api/auth/two-factor/verify', { code: activation.body.codes[1], recovery: true }, expired.cookie)).status, 401);
   const stale = await call('/test/pending', {});
@@ -247,10 +255,11 @@ test('existing sessions cannot bypass newly enabled or replaced 2FA', async () =
     app: { use: (base, handler) => { guard = handler; } },
     query: async () => current ? [current] : [],
     twoFactorSessionBinding: sessionBinding,
+    credentialBinding,
   });
   async function check(secret, stamp) {
-    current = secret === undefined ? null : { two_factor_secret: secret };
-    const req = { originalUrl: '/api/pages', session: { user: { id: 8 }, twoFactorBinding: stamp } };
+    current = secret === undefined ? null : { password_hash: 'current-password', two_factor_secret: secret };
+    const req = { originalUrl: '/api/pages', session: { user: { id: 8 }, credentialBinding: credentialBinding(8, 'current-password'), twoFactorBinding: stamp } };
     req.session.regenerate = done => { req.session = {}; done(); };
     let passed = false, status;
     await guard(req, { status(value) { status = value; return this; }, json() {} }, () => { passed = true; });

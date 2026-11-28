@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS spaces (
   slug VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
   name VARCHAR(120) NOT NULL,
+  titles JSON NULL,
   icon VARCHAR(80) NOT NULL DEFAULT 'fa-book-open',
   logo VARCHAR(500) NULL,
   sort_order INT NOT NULL DEFAULT 0,
@@ -44,6 +45,9 @@ CREATE TABLE IF NOT EXISTS pages (
   icon VARCHAR(80) NOT NULL DEFAULT 'fa-file-lines',
   page_type ENUM('content','redirect') NOT NULL DEFAULT 'content',
   redirect_url VARCHAR(2048) NULL,
+  publication_status VARCHAR(16) NOT NULL DEFAULT 'published',
+  is_wip INTEGER NOT NULL DEFAULT 0,
+  tags JSON NULL,
   sort_order INT NOT NULL DEFAULT 0,
   titles JSON NOT NULL,
   content JSON NOT NULL,
@@ -63,6 +67,9 @@ CREATE TABLE IF NOT EXISTS page_revisions (
   icon VARCHAR(80) NOT NULL,
   page_type ENUM('content','redirect') NOT NULL,
   redirect_url VARCHAR(2048) NULL,
+  publication_status VARCHAR(16) NOT NULL DEFAULT 'published',
+  is_wip INTEGER NOT NULL DEFAULT 0,
+  tags JSON NULL,
   sort_order INT NOT NULL DEFAULT 0,
   titles JSON NOT NULL,
   content JSON NOT NULL,
@@ -142,6 +149,25 @@ CREATE TABLE IF NOT EXISTS background_job_history (
   KEY idx_background_job_history_category_date (category, created_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS dashboard_visitors (
+  visit_day CHAR(10) NOT NULL,
+  visitor_hash CHAR(64) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (visit_day, visitor_hash),
+  KEY idx_dashboard_visitors_day (visit_day)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS dashboard_stats (
+  snapshot_day CHAR(10) NOT NULL PRIMARY KEY,
+  visitor_count INT UNSIGNED NOT NULL DEFAULT 0,
+  users_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  pages_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  happy_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  neutral_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  sad_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  captured_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS rate_limit_buckets (
   bucket_key CHAR(64) NOT NULL PRIMARY KEY,
   total_hits INT UNSIGNED NOT NULL,
@@ -160,3 +186,11 @@ CREATE TABLE IF NOT EXISTS admin_logs (
   KEY idx_admin_logs_user_date (username,occurred_at,id),
   KEY idx_admin_logs_action_date (action_key,occurred_at,id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS user_profiles (user_id BIGINT NOT NULL PRIMARY KEY,full_name VARCHAR(120) NOT NULL DEFAULT '',avatar VARCHAR(255) NOT NULL DEFAULT '',preferred_language VARCHAR(20) NOT NULL DEFAULT 'en',login_notifications INT NOT NULL DEFAULT 1);
+
+CREATE TABLE IF NOT EXISTS oauth_connections (provider VARCHAR(20) NOT NULL PRIMARY KEY,client_id VARCHAR(255) NOT NULL,secret_ciphertext TEXT NOT NULL,redirect_uri VARCHAR(1000) NOT NULL,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
+
+CREATE TABLE IF NOT EXISTS oauth_identities (provider VARCHAR(20) NOT NULL,subject VARCHAR(255) NOT NULL,user_id BIGINT NOT NULL,display_name VARCHAR(255) NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(provider,subject),UNIQUE(user_id,provider));
+
+CREATE TABLE IF NOT EXISTS profile_email_changes (user_id BIGINT NOT NULL PRIMARY KEY,email VARCHAR(254) NOT NULL,token_hash CHAR(64) NOT NULL,expires_at BIGINT NOT NULL);

@@ -3,18 +3,21 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
-    <meta name="theme-color" content="#111214" />
+    <meta name="theme-color" content="#090909" />
     <script>
       try {
         if (localStorage.getItem('wiki-theme') === 'light') document.documentElement.classList.add('theme-light');
       } catch {}
     </script>
+    <style>html { background: #090909; } html.theme-light { background: #ffffff; }</style>
     <meta name="application-name" content="Teralth Studio" />
     <meta property="og:title" content="Teralth Studio" />
     <title>Teralth Studio</title>
     <link id="siteFavicon" rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
     <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css" />
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/errors.css" />
+    <script src="/error-screen.js" defer></script>
     <script src="/app.js" defer></script>
   </head>
   <body>
@@ -38,6 +41,12 @@
           ><span class="skeleton-block skeleton-line medium"></span
           ><span class="skeleton-block skeleton-card"></span>
         </main>
+        <aside class="skeleton-toc">
+          <span class="skeleton-block skeleton-toc-title"></span>
+          <span class="skeleton-block skeleton-toc-line"></span>
+          <span class="skeleton-block skeleton-toc-line short"></span>
+          <span class="skeleton-block skeleton-toc-line"></span>
+        </aside>
       </div>
     </div>
     <div id="app" class="shell">
@@ -98,6 +107,11 @@
       <div class="reading-layout" id="readingLayout">
       <main class="main-column">
         <header class="topbar">
+          <div class="admin-topbar-context" id="adminTopbarContext" hidden>
+            <a class="secondary-button admin-view-wiki" id="adminViewWiki" href="/" target="_blank" rel="noopener noreferrer">
+              <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i><span>View Wiki</span>
+            </a>
+          </div>
           <a href="/" class="brand topbar-brand" id="brand"
             ><span class="brand-mark"><i class="fa-solid fa-book-open"></i></span
             ><span class="brand-copy"

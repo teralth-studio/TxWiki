@@ -1,0 +1,1 @@
+ALTER TABLE page_revisions ADD COLUMN is_wip INTEGER NOT NULL DEFAULT 0;

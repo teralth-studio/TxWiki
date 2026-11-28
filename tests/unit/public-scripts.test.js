@@ -157,7 +157,9 @@ test('fatal error message includes a sanitized code in brackets', () => {
     t(es, en) { return en; },
   };
   vm.runInNewContext(source.slice(start, end) + '\nshowCouldNotStart({ code: "TEST_FAILURE" });', context);
-  const [title, text] = body.children[0].children[0].children;
+  const [status, title, text, back] = body.children[0].children[0].children;
+  assert.equal(status.textContent, '500');
+  assert.equal(back.href, '/');
   assert.equal(title.textContent, '[TEST_FAILURE] An error ocurred');
   assert.equal(text.textContent, 'If you are the server administrator, please check the console');
 });
@@ -281,6 +283,7 @@ test('update admin page validates the selected package before opening maintenanc
     disabled: false,
     className: '',
     innerHTML: '',
+    replaceChildren() {},
     textContent: '',
     style: {},
     attributes: {},
@@ -703,6 +706,7 @@ test('registered user rows show role by name and localized verification badges',
     esc: value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]),
     t: (es, en) => en,
     can: () => true,
+    userAvatarMarkup: () => '<span class="account-initials">US</span>',
   };
   vm.runInNewContext(source.slice(start, end), context);
   const roles = [{ roleKey: 'user', name: 'User', color: '#64748b' }];
@@ -783,7 +787,7 @@ test('login, registration and password change show correctable errors in their f
         return null;
       },
     };
-    const panel = { innerHTML: '' };
+    const panel = { innerHTML: '', append() {} };
     const fatal = [], sent = [];
     let captchaComplete = false;
     const context = {
@@ -797,7 +801,8 @@ test('login, registration and password change show correctable errors in their f
         throw new Error('Unexpected selector: ' + selector);
       },
       $$: (selector, target) => target.fields,
-      document: { addEventListener() {} }, window: {},
+      document: { addEventListener() {}, createElement: () => ({ isConnected: false }) }, window: {},
+      location: { search: '' }, URLSearchParams,
       createCaptchaController: () => ({
         async token() {
           if (!captchaComplete) throw context.validationError('Complete the CAPTCHA verification.');
@@ -808,7 +813,8 @@ test('login, registration and password change show correctable errors in their f
       FormData: class {
         constructor(current) { this.entries = () => current.fields.filter(field => field.name).map(field => [field.name, field.value]); }
       },
-      api: async () => {
+      api: async (path) => {
+        if (path === '/api/auth/connections') return { connections: [] };
         sent.push(mode);
         throw Object.assign(new Error(mode === 'login'
           ? 'No se pudo iniciar sesión. Comprueba tus datos y que tu correo esté confirmado.'
@@ -997,9 +1003,10 @@ test('all public JavaScript is obfuscated and source files and maps are not serv
     assert.equal(versionedAppResponse.status, 200);
     assert.equal(versionedAppResponse.headers.get('cache-control'), 'public, max-age=31536000, immutable');
     const appSource = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'app.js'));
+    const errorSource = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'error-screen.js'));
     assert.equal(
       versionedAppPath,
-      `/app-${crypto.createHash('sha256').update(appSource).digest('hex').slice(0, 16)}.js`,
+      `/app-${crypto.createHash('sha256').update(appSource).update('\0').update(errorSource).update('\0').digest('hex').slice(0, 16)}.js`,
     );
     assert.doesNotMatch(index, /src="\/admin-updates\.js"/);
     assert.equal((await fetch(origin + '/app.js', { method: 'POST' })).status, 404);

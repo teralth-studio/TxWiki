@@ -73,3 +73,17 @@ test('installer rejects unverified connection settings before streaming or savin
   assert.equal(res.lines.length, 0);
   assert.equal(calls.length, 0);
 });
+
+test('installer accepts disabled SMTP without an email proof but still requires a database proof', async () => {
+  const { handler, calls, context } = installHandler({ verifiedEmailSignatures: new Set() });
+  const res = response();
+  await handler({ body: { smtpEnabled: false } }, res);
+  assert.equal(context.installSaved, true);
+  assert.equal(res.lines.at(-1).stage, 'starting');
+  assert.equal(calls[0], 'database');
+  const unverified = installHandler({ verifiedDbSignatures: new Set(), verifiedEmailSignatures: new Set() });
+  const denied = response();
+  await unverified.handler({ body: { smtpEnabled: false } }, denied);
+  assert.equal(denied.statusCode, 400);
+  assert.equal(unverified.calls.length, 0);
+});

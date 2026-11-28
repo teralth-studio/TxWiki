@@ -4,6 +4,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { test } = require('node:test');
 const { loginDetails } = require('../../scripts/login-details');
+const { credentialBinding } = require('../../scripts/session-security');
 
 const chromeWindows = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 const safariMac = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
@@ -49,6 +50,7 @@ test('ordinary password login passes the request to its success notification', a
     app: { post: (...args) => { handler = args.at(-1); } }, loginLimiter() {}, loginAccountLimiter() {},
     verifyCaptcha: async () => true, query: async () => [user], bcrypt: { compare: async () => true },
     Buffer, DUMMY_HASH: 'dummy', token: () => 'csrf', userView: value => ({ id: value.id }),
+    credentialBinding,
     notifySuccessfulLogin: (value, req) => { notification = { value, req }; },
   });
   const req = { body: { email: 'person', password: 'correct' }, session: {} };
@@ -57,6 +59,7 @@ test('ordinary password login passes the request to its success notification', a
   await handler(req, { json: value => { response = value; } }, error => { failure = error; });
   assert.equal(failure, undefined);
   assert.equal(response.user.id, user.id);
+  assert.equal(req.session.credentialBinding, credentialBinding(user.id, user.password_hash));
   assert.equal(notification.value, user);
   assert.equal(notification.req, req);
 });
@@ -85,12 +88,14 @@ test('successful login notification renders and queues the request details', asy
   const messages = [];
   const context = {
     fs, path, __dirname: path.join(__dirname, '..', '..'), Intl, Date,
-    mailer: {}, loginDetails,
+    mailer: {}, loginDetails, query: async () => [],
+    backupTimeZone: 'America/Guayaquil',
     enqueueMail: async (...args) => { messages.push(args); },
     console,
   };
   vm.runInNewContext(source.slice(renderStart, renderEnd) + '\n' + source.slice(start, end) + '\nthis.notify = notifySuccessfulLogin;', context);
   context.notify({ username: 'Alice', email: 'person@example.test' }, request('192.0.2.9', chromeWindows));
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(messages.length, 1);
   assert.equal(messages[0][0], 'person@example.test');
   assert.equal(messages[0][1], 'New sign-in');

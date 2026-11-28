@@ -64,6 +64,8 @@
           </section>
           <section class="setup-page" data-page="2" hidden>
             <div class="form-heading"><h1 data-es="Correo SMTP" data-en="SMTP email">SMTP email</h1><p data-es="Verifica la conexión enviando un correo de prueba real." data-en="Verify the connection by sending a real test email.">Verify the connection by sending a real test email.</p></div>
+            <label class="check-row"><input id="smtpEnabled" class="setup-switch" type="checkbox" role="switch" checked /><span data-es="Activar SMTP" data-en="Enable SMTP">Enable SMTP</span></label>
+            <div id="smtpConfiguration">
             <div class="field-grid">
               <label><span data-es="Host SMTP" data-en="SMTP host">SMTP host</span><input id="smtpHost" placeholder="smtp.example.com" required /></label>
               <label><span data-es="Puerto SMTP" data-en="SMTP port">SMTP port</span><input id="smtpPort" type="number" min="1" max="65535" value="587" required /></label>
@@ -75,6 +77,7 @@
             <label class="check-row"><input id="smtpSecure" type="checkbox" /><span data-es="Conexión SMTP segura (puerto 465)" data-en="Secure SMTP connection (port 465)">Secure SMTP connection (port 465)</span></label>
             <button id="testSmtp" class="button-secondary" type="button" data-es="Verificar conexión" data-en="Verify connection">Verify connection</button>
             <div id="smtpMessage" class="inline-message" role="status" hidden></div>
+            </div>
             <div class="form-actions"><button class="button-secondary back" type="button" data-es="Atrás" data-en="Back">Back</button><button id="nextSmtp" class="button-primary" type="button" disabled data-es="Continuar" data-en="Continue">Continue</button></div>
           </section>
           <section class="setup-page" data-page="3" hidden>

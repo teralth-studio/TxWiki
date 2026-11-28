@@ -12,7 +12,7 @@ const nodemailer = require('nodemailer');
 const { rateLimit } = require('express-rate-limit');
 const { createSiteRateLimiter } = require('./scripts/site-rate-limit');
 const { senderEmailAddress, validEmailAddress } = require('./scripts/auth/email-address');
-const { publicScripts, publicStaticOnly, sendPublicHtml } = require('./scripts/public-scripts');
+const { publicScripts, publicStaticOnly, sendPublicHtml, preparePublicAssets } = require('./scripts/public-scripts');
 const { saveInstallerImages } = require('./scripts/installer-images');
 
 const root = __dirname;
@@ -246,22 +246,25 @@ function validateInstall(body) {
     throw new SetupInputError(
       'Usa solo el origen público de la wiki. En producción debe comenzar con https://.',
     );
+  const smtpEnabled = body.smtpEnabled !== false;
   const smtpHost = String(body.smtpHost ?? '').trim();
   const smtpUser = String(body.smtpUser ?? '').trim();
   const smtpPassword = String(body.smtpPassword ?? '');
   const smtpPort = Number(body.smtpPort || 587);
   const smtpFrom = cleanText(body.smtpFrom, 254);
   const smtpTestEmail = cleanText(body.smtpTestEmail, 254).toLowerCase();
-  for (const value of [smtpHost, smtpUser, smtpPassword, smtpFrom])
-    if (/[\r\n\0]/.test(value)) throw new Error('Revisa los datos SMTP.');
-  if (smtpHost.length > 255 || smtpUser.length > 255 || smtpPassword.length > 1024 || smtpFrom.length > 254)
-    throw new Error('Uno de los campos SMTP excede el tamaño permitido.');
-  if (!smtpHost) throw new SetupInputError('El host SMTP es obligatorio.');
-  if (!validPort(smtpPort)) throw new SetupInputError('El puerto SMTP debe estar entre 1 y 65535.');
-  if (!validEmail(smtpTestEmail)) throw new SetupInputError('Ingresa un correo de prueba válido.');
-  if (!validSender(smtpFrom)) throw new SetupInputError('Ingresa un remitente SMTP con correo válido.');
-  if (Boolean(smtpUser) !== Boolean(smtpPassword))
-    throw new SetupInputError('Completa tanto el usuario SMTP como su contraseña, o deja ambos vacíos.');
+  if (smtpEnabled) {
+    for (const value of [smtpHost, smtpUser, smtpPassword, smtpFrom])
+      if (/[\r\n\0]/.test(value)) throw new Error('Revisa los datos SMTP.');
+    if (smtpHost.length > 255 || smtpUser.length > 255 || smtpPassword.length > 1024 || smtpFrom.length > 254)
+      throw new Error('Uno de los campos SMTP excede el tamaño permitido.');
+    if (!smtpHost) throw new SetupInputError('El host SMTP es obligatorio.');
+    if (!validPort(smtpPort)) throw new SetupInputError('El puerto SMTP debe estar entre 1 y 65535.');
+    if (!validEmail(smtpTestEmail)) throw new SetupInputError('Ingresa un correo de prueba válido.');
+    if (!validSender(smtpFrom)) throw new SetupInputError('Ingresa un remitente SMTP con correo válido.');
+    if (Boolean(smtpUser) !== Boolean(smtpPassword))
+      throw new SetupInputError('Completa tanto el usuario SMTP como su contraseña, o deja ambos vacíos.');
+  }
   const configuration = {
     NODE_ENV: nodeEnv,
     HOST: host,
@@ -274,12 +277,13 @@ function validateInstall(body) {
     BASE_URL: baseUrl,
     DB_POOL_LIMIT: '5',
     DATA_DIR: './data',
-    SMTP_HOST: smtpHost,
+    SMTP_ENABLED: String(smtpEnabled),
+    SMTP_HOST: smtpEnabled ? smtpHost : '',
     SMTP_PORT: String(validPort(smtpPort) ? smtpPort : 587),
     SMTP_SECURE: String(body.smtpSecure === true),
-    SMTP_USER: smtpUser,
-    SMTP_PASS: smtpPassword,
-    SMTP_FROM: smtpFrom,
+    SMTP_USER: smtpEnabled ? smtpUser : '',
+    SMTP_PASS: smtpEnabled ? smtpPassword : '',
+    SMTP_FROM: smtpEnabled ? smtpFrom : '',
   };
   if (db.type === 'sqlite') {
     configuration.DB_TYPE = 'sqlite';
@@ -498,7 +502,7 @@ if (isConfigured) {
       const configuration = validateInstall(req.body);
       if (!verifiedDbSignatures.has(databaseSignature(req.body)))
          throw new SetupInputError('Prueba la base de datos seleccionada con los datos que vas a guardar.');
-      if (!verifiedEmailSignatures.has(emailSignature(req.body)))
+      if (req.body.smtpEnabled !== false && !verifiedEmailSignatures.has(emailSignature(req.body)))
         throw new SetupInputError('Envía el correo de prueba con la configuración SMTP que vas a guardar.');
       installInProgress = true;
       res.set('Content-Type', 'application/x-ndjson; charset=utf-8');
@@ -544,6 +548,7 @@ if (isConfigured) {
   });
   app.get('/', sendPublicHtml('installer.html'));
   app.get('/installer.css', publicStaticOnly);
+  app.get('/buttons.css', publicStaticOnly);
   app.get('/installer.js', publicScripts);
   app.get('/assets/fonts/:filename', publicStaticOnly);
   app.use((req, res, next) => (req.method === 'GET' ? res.redirect('/') : next()));
@@ -556,9 +561,15 @@ if (isConfigured) {
   const host =
     process.env.HOST ||
     (process.env.NODE_ENV === 'production' || process.env.P_SERVER_UUID ? '0.0.0.0' : '127.0.0.1');
-  const installerServer = app.listen(port, host, () =>
-    console.log(
-      `Teralth Studio installer available at ${host}:${port}. See setup.key to authorize installation.`,
-    ),
-  );
+  let installerServer;
+  preparePublicAssets({ installer: true }).then(() => {
+    installerServer = app.listen(port, host, () =>
+      console.log(
+        `Teralth Studio installer available at ${host}:${port}. See setup.key to authorize installation.`,
+      ),
+    );
+  }).catch(error => {
+    console.error('Could not prepare installer assets:', error.code || error.name);
+    process.exitCode = 1;
+  });
 }

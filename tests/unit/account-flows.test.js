@@ -4,6 +4,7 @@ const path = require('node:path');
 const { test } = require('node:test');
 const vm = require('node:vm');
 const { senderEmailAddress, validEmailAddress } = require('../../scripts/auth/email-address');
+const { credentialBinding } = require('../../scripts/session-security');
 
 const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8').replace(/\r\n/g, '\n');
 function route(pathname, nextPath, dependencies) {
@@ -16,6 +17,8 @@ function route(pathname, nextPath, dependencies) {
     loginLimiter() {},
     senderEmailAddress,
     validEmailAddress,
+    credentialBinding,
+    backupTimeZone: 'America/Guayaquil',
     ...dependencies,
   };
   vm.runInNewContext(source.slice(start, end), context);
@@ -287,6 +290,7 @@ test('successful password change queues the account notification and keeps its r
   assert.equal(notifications[0][1], 'password_changed.html');
   assert.equal(notifications[0][2], 'Password updated');
   assert.deepEqual(invalidations, [8]);
+  assert.equal(req.session.credentialBinding, credentialBinding(8, 'new-hash'));
 });
 
 test('administrator password recovery queues an English subject', async () => {
@@ -311,7 +315,7 @@ test('administrator password recovery queues an English subject', async () => {
     generateTemporaryPassword: () => 'temporary', bcrypt: { hash: async () => 'hash' },
     pool: { getConnection: async () => conn },
     enqueueMail: async (...args) => mails.push(args), emailTemplate: name => name,
-    invalidateUserSessions: async () => {}, Intl, Date,
+    invalidateUserSessions: async () => {}, Intl, Date, backupTimeZone: 'America/Guayaquil',
   });
   let failure;
   const res = response();

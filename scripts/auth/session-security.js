@@ -1,5 +1,13 @@
+const crypto = require('node:crypto');
 const SESSION_IDLE_MS = 30 * 60 * 1000;
 const SESSION_ABSOLUTE_MS = 12 * 60 * 60 * 1000;
+
+// Bind authentication to the credential actually checked at sign-in. Deleting
+// stored sessions alone cannot revoke an already loaded request that saves later.
+function credentialBinding(userId, passwordHash) {
+  if (typeof passwordHash !== 'string' || !passwordHash) return null;
+  return crypto.createHash('sha256').update(`${userId}:${passwordHash}`).digest('hex');
+}
 
 function rejectLegacySessions(req, res, next) {
   if (!req.session || req.session.cookie.originalMaxAge === SESSION_IDLE_MS) return next();
@@ -29,6 +37,7 @@ function enforceAbsoluteSessionLifetime(req, res, next) {
 module.exports = {
   SESSION_ABSOLUTE_MS,
   SESSION_IDLE_MS,
+  credentialBinding,
   enforceAbsoluteSessionLifetime,
   rejectLegacySessions,
 };

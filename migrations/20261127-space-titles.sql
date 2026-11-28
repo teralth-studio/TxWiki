@@ -1,0 +1,2 @@
+ALTER TABLE spaces ADD COLUMN titles JSON NULL;
+

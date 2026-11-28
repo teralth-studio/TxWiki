@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const OTPAuth = require('otpauth');
 const QRCode = require('qrcode');
+const { credentialBinding } = require('./session-security');
 
 const LIFETIME = 10 * 60 * 1000;
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -69,7 +70,7 @@ function registerTwoFactorRoutes(app, { pool, query, auth, limiter, bcrypt, sess
       }
       const step = security.verify(security.decrypt(setup.secret), String(req.body.code || '').trim());
       if (step === null) return failCode(res);
-      const codes = Array.from({ length: 10 }, () => crypto.randomBytes(16).toString('hex').toUpperCase().match(/.{1,4}/g).join('-'));
+      const codes = Array.from({ length: 8 }, () => crypto.randomBytes(16).toString('hex').toUpperCase().match(/.{1,4}/g).join('-'));
       conn = await pool.getConnection();
       await conn.beginTransaction(); transaction = true;
       const [rows] = await conn.execute('SELECT email,username,verified_at,two_factor_secret FROM users WHERE id=? FOR UPDATE', [req.session.user.id]);
@@ -133,12 +134,32 @@ function registerTwoFactorRoutes(app, { pool, query, auth, limiter, bcrypt, sess
       conn.release(); conn = null;
       await regenerate(req.session);
       req.session.user = userView(user);
+      req.session.credentialBinding = credentialBinding(user.id, user.password_hash);
       req.session.twoFactorBinding = sessionBinding(user.id, user.two_factor_secret);
       req.session.csrfToken = token();
       await save(req.session);
       notifySuccessfulLogin(user, req);
       res.json({ user: req.session.user, csrfToken: req.session.csrfToken });
     } catch (error) { if (transaction) await conn.rollback(); next(error); }
+    finally { if (conn) conn.release(); }
+  });
+
+  app.post('/api/auth/two-factor/recovery', auth, limiter, noCache, async (req, res, next) => {
+    let conn;
+    try {
+      conn = await pool.getConnection();
+      await conn.beginTransaction();
+      const [rows] = await conn.execute('SELECT password_hash,two_factor_secret FROM users WHERE id=? FOR UPDATE', [req.session.user.id]);
+      const password = String(req.body.password || '');
+      if (!rows[0]?.two_factor_secret || !password || Buffer.byteLength(password, 'utf8') > 72 || !(await bcrypt.compare(password, rows[0].password_hash))) {
+        await conn.rollback();
+        return res.status(403).json({ error: 'The current password is incorrect or 2FA is not enabled.' });
+      }
+      const codes = Array.from({ length: 8 }, () => crypto.randomBytes(16).toString('hex').toUpperCase().match(/.{1,4}/g).join('-'));
+      await conn.execute('UPDATE users SET two_factor_recovery_codes=? WHERE id=?', [JSON.stringify(codes.map(code => digest(code.replace(/-/g, '')))), req.session.user.id]);
+      await conn.commit();
+      res.json({ codes });
+    } catch (error) { if (conn) await conn.rollback(); next(error); }
     finally { if (conn) conn.release(); }
   });
 

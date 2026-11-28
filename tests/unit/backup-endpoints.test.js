@@ -66,6 +66,7 @@ test('manual backup creation rejects an existing job and queues when none exists
     auth() {},
     requirePermission() { return () => {}; },
     backupCreateLimiter() {},
+    backupRetentionCount: 5,
     query: async () => rows,
     enqueueJob: async () => { queued += 1; return true; },
     crypto,
@@ -88,5 +89,10 @@ test('manual backup creation rejects an existing job and queues when none exists
   await handler(req, createdResponse, error => { throw error; });
   assert.equal(createdResponse.statusCode, 202);
   assert.equal(createdResponse.body.queued, true);
+  assert.equal(queued, 1);
+  context.backupRetentionCount = 0;
+  const disabled = response();
+  await handler(req, disabled, error => { throw error; });
+  assert.equal(disabled.statusCode, 409);
   assert.equal(queued, 1);
 });

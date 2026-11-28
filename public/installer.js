@@ -5,7 +5,7 @@ let currentStep = 0, furthestStep = 0, databasePassed = false, emailPassed = fal
 let databaseTestRun = 0, emailTestRun = 0, installing = false;
 const databaseFields = ['dbType', 'dbSqliteFile', 'dbHost', 'dbPort', 'dbName', 'dbUser', 'dbPassword', 'dbSsl'];
 const emailFields = ['smtpHost', 'smtpPort', 'smtpUser', 'smtpPassword', 'smtpFrom', 'smtpTestEmail', 'smtpSecure'];
-const fields = [...databaseFields, ...emailFields, 'siteName', 'baseUrl', 'nodeEnv', 'appHost', 'appPort',
+const fields = ['smtpEnabled', ...databaseFields, ...emailFields, 'siteName', 'baseUrl', 'nodeEnv', 'appHost', 'appPort',
   'adminUsername', 'adminEmail', 'adminPassword', 'adminPasswordConfirm'];
 const t = (es, en) => language === 'es' ? es : en;
 const collect = (ids = fields) => Object.fromEntries(ids.map((id) => {
@@ -70,7 +70,7 @@ function invalidateDatabase() {
 }
 function invalidateEmail() {
   emailTestRun++;
-  emailPassed = false;
+  emailPassed = !$('#smtpEnabled').checked;
   $('#smtpMessage').hidden = true;
   $('#testSmtp').disabled = false;
   renderSteps();
@@ -333,6 +333,10 @@ for (const id of ['adminUsername', 'adminEmail']) $('#' + id).addEventListener('
 $$('.setup-page[data-page="3"] input, .setup-page[data-page="3"] select').forEach((input) =>
   input.addEventListener('change', () => { $('#websiteMessage').hidden = true; }));
 $('#testDatabase').addEventListener('click', () => testConnection('db'));
+$('#smtpEnabled').addEventListener('change', () => {
+  $('#smtpConfiguration').hidden = !$('#smtpEnabled').checked;
+  invalidateEmail();
+});
 $('#testSmtp').addEventListener('click', () => testConnection('smtp'));
 $('#nextSetupKey').addEventListener('click', () => {
   if (!$('#setupCode').value.trim()) {

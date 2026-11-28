@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import express from 'express';
 import path from 'path';
+import { publicScripts, publicStaticOnly, sendPublicHtml } from '../scripts/public-scripts.js';
 
 let server;
 let origin;
@@ -27,9 +28,23 @@ test.beforeAll(async () => {
     pages: [documentPage], categories: [], homePageSlug: 'home',
     page: documentPage, reactions: [], myReaction: '',
   }));
+  app.get('/api/admin/dashboard', (req, res) => res.json({
+    version: '1.6.5', timeZone: 'UTC', updatePermission: false,
+    totals: { users: 1, visitors: 0, pages: 1, reactions: 0, happy: 0, neutral: 0, sad: 0 }, series: [],
+  }));
+  app.get('/api/admin/categories', (req, res) => res.json({ categories: [] }));
+  app.get('/api/admin/pages', (req,res) => res.json({ pages: [documentPage], categories: [], homePageSlug: 'home' }));
+  app.get('/api/admin/pages/:slug', (req,res) => res.json({ page: documentPage }));
   app.use('/languages', express.static(path.join(process.cwd(), 'languages')));
   app.use('/vendor/prism', express.static(path.join(process.cwd(), 'node_modules', 'prismjs')));
   app.use('/vendor/fontawesome', express.static(path.join(process.cwd(), 'node_modules', '@fortawesome', 'fontawesome-free')));
+  app.get('/production-errors', sendPublicHtml('index.html', html => html
+    .replace(/<script\b[^>]*src="\/error-screen\.js"[^>]*><\/script>/g, '')
+    .replace(/<link\b[^>]*href="\/errors\.css"[^>]*>/g, '')));
+  app.use((req,res,next) => {
+    if (req.path.startsWith('/app-') || req.get('referer')?.includes('/production-errors')) return publicScripts(req,res,()=>publicStaticOnly(req,res,next));
+    next();
+  });
   app.use(express.static(path.join(process.cwd(), 'public')));
   app.get(/^\/admin(?:\/.*)?$/, (req, res) => res.sendFile(path.join(process.cwd(), 'public', 'index.html')));
   await new Promise(resolve => { server = app.listen(0, '127.0.0.1', resolve); });
@@ -40,6 +55,102 @@ test.afterAll(async () => {
   if (server) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 });
 
+for (const width of [390, 768, 1440]) {
+  test(`bundled 404 fills the viewport without standalone error assets at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.route('**/error-screen.js', route => route.abort());
+    await page.route('**/errors.css', route => route.abort());
+    await page.route('**/api/pages', route => route.fulfill({ json: {
+      pages: [], categories: [], homePageSlug: null, page: null, reactions: [],
+    } }));
+    await page.goto(`${origin}/production-errors`);
+    const screen = page.locator('body > #pageErrorScreen.tx-error-screen');
+    await expect(screen).toBeVisible();
+    await expect(screen).not.toHaveClass(/not-found-page/);
+    await expect(screen).toHaveCSS('border-top-width', '0px');
+    await expect(screen).toHaveCSS('background-color', 'rgb(0, 0, 0)');
+    await expect(screen.locator('.error-accessible-copy')).toHaveText('404, page not found.');
+    const box = await screen.boundingBox();
+    expect(box).toMatchObject({ x: 0, y: 0, width, height: 900 });
+    const copy = await screen.locator('.copy-container').boundingBox();
+    expect(Math.abs(copy.x + copy.width / 2 - width / 2)).toBeLessThan(2);
+    expect(Math.abs(copy.y + copy.height / 2 - 450)).toBeLessThan(2);
+    await expect(page.locator('#app')).toBeHidden();
+    await expect(screen.getByRole('button', { name: 'Replay animation' })).toBeVisible();
+    const back = screen.getByRole('link', { name: 'Go back' });
+    await expect(back).toHaveAttribute('href', '/');
+    const backBox = await back.boundingBox();
+    const messageBox = await screen.locator('.error-copy').boundingBox();
+    expect(backBox.y).toBeGreaterThan(messageBox.y + messageBox.height);
+    expect(Math.abs(backBox.x + backBox.width / 2 - width / 2)).toBeLessThan(2);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+    await page.route('**/api/pages', route => route.fulfill({ json: {
+      pages: [documentPage], categories: [], homePageSlug: 'home', page: documentPage, reactions: [],
+    } }));
+    await back.click();
+    await expect(page.locator('#article h1')).toHaveText('Home');
+    await expect(page.locator('#pageErrorScreen')).toHaveCount(0);
+  });
+}
+
+for (const width of [390, 768, 1440]) {
+  for (const theme of ['dark', 'light']) {
+    test(`404 covers the whole viewport at ${width}px in ${theme} mode`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.addInitScript(value => localStorage.setItem('wiki-theme', value), theme);
+      await page.route('**/api/pages', route => route.fulfill({ json: {
+        pages: [], categories: [], homePageSlug: null, page: null, reactions: [],
+      } }));
+      await page.goto(origin);
+      const screen = page.locator('body > #pageErrorScreen');
+      await expect(screen).toBeVisible();
+      await expect(page.locator('#app')).toBeHidden();
+      const box = await screen.boundingBox();
+      expect(box.x).toBe(0);
+      expect(box.y).toBe(0);
+      expect(box.width).toBe(width);
+      expect(box.height).toBeGreaterThanOrEqual(900);
+      await expect(screen).toHaveCSS('background-color', 'rgb(0, 0, 0)');
+      await expect(screen.locator('.error-accessible-copy')).toHaveText('404, page not found.');
+      await expect(screen.getByRole('link')).toBeVisible();
+      await expect(screen.getByRole('button', { name: 'Replay animation' })).toBeVisible();
+      await expect(screen.locator('.handle')).toHaveCSS('background-color', 'rgb(255, 229, 0)');
+      await expect.poll(() => screen.locator('.error-char:not(.is-visible)').count()).toBe(0);
+      await screen.getByRole('button', { name: 'Replay animation' }).click();
+      expect(await screen.locator('.error-char:not(.is-visible)').count()).toBeGreaterThan(0);
+    });
+  }
+}
+
+test('fatal errors use the full-screen terminal and disable background controls', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.route('**/api/config', route => route.fulfill({ status: 500, json: { error: 'Server error', code: 'TEST_FAILURE' } }));
+  await page.goto(origin);
+  const screen = page.locator('#fatalBox.tx-error-screen');
+  await expect(screen).toBeVisible();
+  await expect(screen.locator('.error-accessible-copy')).toHaveText('500, an error occurred.');
+  await expect(page.locator('#app')).toHaveAttribute('inert', '');
+  const box = await screen.boundingBox();
+  expect(box.width).toBe(390);
+  expect(box.height).toBeGreaterThanOrEqual(800);
+});
+
+test('error animation supports reduced motion, wrapped text and keyboard replay', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 600 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(`${origin}/errors/500.html`);
+  const screen = page.locator('.tx-error-screen');
+  await expect(screen.locator('.error-accessible-copy')).toHaveText('500, internal server error.');
+  await expect(screen.locator('.error-char:not(.is-visible)')).toHaveCount(0);
+  await expect(screen.locator('.handle')).toHaveCSS('animation-name', 'none');
+  const copy = await screen.locator('.copy-container').boundingBox();
+  expect(copy.x).toBeGreaterThanOrEqual(0);
+  expect(copy.x + copy.width).toBeLessThanOrEqual(320);
+  await screen.getByRole('button', { name: 'Replay animation' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(screen.locator('.error-char:not(.is-visible)')).toHaveCount(0);
+});
+
 test('spoilers are closed by default, work with keyboard, and reveal headings from the outline', async ({ page }) => {
   const content = '<h1>Home</h1><details class="wiki-spoiler"><summary><i class="spoiler-icon fa-solid fa-eye-slash"></i><span class="spoiler-title">Reveal</span></summary><div class="spoiler-body"><h2>Hidden heading</h2><p><strong>Secret</strong></p><div class="hint success"><span class="hint-body">Success</span></div><div class="code-block"><div class="code-block-heading"><span class="code-format-label" data-language="text">Text</span></div><pre><code>hello</code></pre></div></div></details>';
   await page.route('**/api/pages', route => route.fulfill({ json: {
@@ -47,6 +158,7 @@ test('spoilers are closed by default, work with keyboard, and reveal headings fr
     page: { ...documentPage, content: { en: content } }, reactions: [],
   } }));
   await page.goto(origin);
+  await page.locator('#globalLoader').waitFor({ state: 'hidden' });
   const spoiler = page.locator('#article .wiki-spoiler');
   await expect(spoiler).not.toHaveAttribute('open');
   await expect(spoiler.locator('.spoiler-body')).toBeHidden();
@@ -113,11 +225,11 @@ test('code blocks share the spoiler surface in dark and light themes', async ({ 
     return [style('.wiki-spoiler'), style('.article .code-block')];
   });
   await expect.poll(surfaceStyles).toEqual([
-    ['12px', 'rgb(39, 39, 42)', 'rgb(17, 17, 19)'],
-    ['12px', 'rgb(39, 39, 42)', 'rgb(17, 17, 19)'],
+    ['12px', 'rgb(39, 39, 39)', 'rgb(17, 17, 17)'],
+    ['12px', 'rgb(39, 39, 39)', 'rgb(17, 17, 17)'],
   ]);
   await page.locator('#themeToggle').click();
-  await expect.poll(async () => (await surfaceStyles())[0][1]).toBe('rgb(223, 226, 230)');
+  await expect.poll(async () => (await surfaceStyles())[0][1]).toBe('rgb(222, 222, 222)');
   const light = await surfaceStyles();
   expect(light[0]).toEqual(light[1]);
 });
@@ -145,16 +257,16 @@ for (const width of [1440, 1024, 940, 390]) {
     }
     await account.click();
     await page.locator('[data-user-action="admin"]').click();
-    await expect(page).toHaveURL(/\/admin\/pages\?space=main$/);
+    await expect(page).toHaveURL(/\/admin\/dashboard$/);
     await expect(page.locator('body')).not.toHaveClass(/wiki-mode/);
   });
 }
 
-test('site identity stays in the navbar, separate from the workspace picker', async ({ page }) => {
+test('site identity stays above the workspace picker in the public sidebar', async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 900 });
   await page.goto(origin);
   await expect(page.locator('#article h1')).toBeVisible();
-  const desktopBrand = page.locator('#brand');
+  const desktopBrand = page.locator('.wiki-sidebar-brand');
   await expect(desktopBrand.locator('.brand-name')).toHaveText('Teralth Wiki');
   await expect(desktopBrand.locator('.brand-mark')).toBeVisible();
   const brandHit = await desktopBrand.evaluate(element => {
@@ -166,17 +278,14 @@ test('site identity stays in the navbar, separate from the workspace picker', as
   await expect(page.locator('#spaceCurrentName')).toHaveText('Documentation');
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const mobileBrand = page.locator('#mobileDocsBrand');
-  await expect(mobileBrand).toBeVisible();
-  await expect(mobileBrand.locator('.mobile-docs-name')).toHaveText('Teralth Wiki');
-  await expect(mobileBrand.locator('.brand-mark')).toBeVisible();
-  await expect(desktopBrand).toBeHidden();
+  await expect(page.locator('#mobileDocsBrand')).toBeHidden();
   await page.locator('#openSidebar').click();
+  await expect(desktopBrand).toBeVisible();
   await expect(page.locator('#spaceDropdownButton')).toBeVisible();
   await expect(page.locator('#spaceCurrentName')).toHaveText('Documentation');
 });
 
-test('public links sit beside the site identity on desktop and mobile', async ({ page }) => {
+test('public header links occupy the reading navbar on desktop and mobile', async ({ page }) => {
   await page.route('**/api/config', async route => {
     const response = await route.fetch();
     const config = await response.json();
@@ -202,24 +311,11 @@ test('public links sit beside the site identity on desktop and mobile', async ({
 
   for (const width of [1024, 390]) {
     await page.setViewportSize({ width, height: 900 });
-    const brand = page.locator(width <= 680 ? '#mobileDocsBrand' : '#brand');
-    await expect(brand).toBeVisible();
-    const [brandBox, navBox] = await Promise.all([brand.boundingBox(), nav.boundingBox()]);
-    expect(navBox.x).toBeGreaterThanOrEqual(brandBox.x + brandBox.width - 1);
-    expect(Math.abs(navBox.y + navBox.height / 2 - brandBox.y - brandBox.height / 2)).toBeLessThanOrEqual(4);
+    await expect(page.locator('#brand')).toBeHidden();
+    const navBox = await nav.boundingBox(), headerBox = await page.locator('.topbar').boundingBox();
+    expect(navBox.x).toBeGreaterThanOrEqual(headerBox.x);
+    expect(navBox.x + navBox.width).toBeLessThanOrEqual(headerBox.x + headerBox.width);
     expect(navBox.width).toBeGreaterThan(0);
-    if (width > 680) {
-      await expect(page.locator('#brand')).toHaveCSS('border-right-width', '0px');
-      expect(navBox.x - (brandBox.x + brandBox.width)).toBeLessThanOrEqual(13);
-    }
-    if (width <= 680) {
-      const [searchBox, menuBox] = await Promise.all([
-        page.locator('#mobileDocsSearch').boundingBox(),
-        page.locator('#openSidebar').boundingBox(),
-      ]);
-      expect(searchBox.y).toBeGreaterThanOrEqual(brandBox.y + brandBox.height - 1);
-      expect(menuBox.y).toBeGreaterThanOrEqual(brandBox.y + brandBox.height - 1);
-    }
   }
 });
 
@@ -233,7 +329,7 @@ test('header works without a visible table of contents and in the light theme', 
   await page.keyboard.press('Enter');
   await expect(page.locator('#userMenu')).toBeVisible();
   await page.locator('[data-user-action="admin"]').click();
-  await expect(page).toHaveURL(/\/admin\/pages\?space=main$/);
+  await expect(page).toHaveURL(/\/admin\/dashboard$/);
 });
 
 test('documentation spaces has its own admin section, separate from general settings', async ({ page }) => {
@@ -243,12 +339,12 @@ test('documentation spaces has its own admin section, separate from general sett
   await page.locator('#accountLink').focus();
   await page.keyboard.press('Enter');
   await page.locator('[data-user-action="admin"]').click();
-  await expect(page).toHaveURL(/\/admin\/pages\?space=main$/);
+  await expect(page).toHaveURL(/\/admin\/dashboard$/);
   await expect(page.locator('#adminNavigation')).toBeVisible();
   await page.locator('#adminNavigation [data-tab="spaces"]').click();
   await expect(page).toHaveURL(/\/admin\/spaces$/);
   await expect(page.locator('#spaceRows')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Documentation spaces' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Spaces', level: 1 })).toBeVisible();
   await page.locator('#adminNavigation [data-tab="settings"]').click();
   await expect(page).toHaveURL(/\/admin\/settings$/);
   await expect(page.locator('#spaceRows')).toHaveCount(0);
@@ -256,27 +352,28 @@ test('documentation spaces has its own admin section, separate from general sett
 });
 
 for (const width of [1440, 390]) {
-  test(`navigation remains full width while the reading pane scrolls at ${width}px`, async ({ page }) => {
+  test(`navigation remains fixed over the reading pane while it scrolls at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(origin);
     await expect(page.locator('#article h1')).toBeVisible();
     const header = page.locator('.topbar');
     await expect(header).toHaveCSS('position', 'fixed');
     const before = await header.boundingBox();
-    expect(before.x).toBe(0);
-    expect(before.width).toBe(width);
+    const left = width > 940 ? await page.locator('#sidebar').evaluate(el => el.getBoundingClientRect().width) : 0;
+    expect(before.x).toBe(left);
+    expect(before.width).toBe(width - left);
     await page.locator('#article').evaluate(element => { element.style.minHeight = '1600px'; });
     await page.locator('#readingLayout').evaluate(element => { element.scrollTop = 500; });
     await expect.poll(() => page.locator('#readingLayout').evaluate(element => element.scrollTop)).toBeGreaterThan(300);
     await expect(page.locator('body')).not.toHaveClass(/wiki-scrolled/);
     const after = await header.boundingBox();
     expect(after.y).toBe(0);
-    expect(after.x).toBe(0);
-    expect(after.width).toBe(width);
-    await expect(page.locator(width <= 680 ? '#mobileDocsBrand' : '#brand')).toBeVisible();
+    expect(after.x).toBe(left);
+    expect(after.width).toBe(width - left);
+    await expect(page.locator('#brand')).toBeHidden();
     await page.locator('#readingLayout').evaluate(element => { element.scrollTop = 0; });
     await expect.poll(async () => (await header.boundingBox()).y).toBe(0);
-    await expect.poll(async () => (await header.boundingBox()).width).toBe(width);
+    await expect.poll(async () => (await header.boundingBox()).width).toBe(width - left);
   });
 }
 
@@ -298,8 +395,8 @@ test('documentation uses a neutral near-black palette in both themes', async ({ 
   });
   await expect(page.locator('body')).toHaveClass(/wiki-mode/);
   await expect.poll(colors).toMatchObject({
-    sidebar: 'rgb(17, 17, 19)',
-    surface: 'rgb(9, 9, 11)',
+    sidebar: 'rgb(17, 17, 17)',
+    surface: 'rgb(9, 9, 9)',
     activeBackground: 'rgba(0, 0, 0, 0)',
     activeText: 'rgb(250, 250, 250)',
     article: 'rgb(250, 250, 250)',
@@ -309,8 +406,8 @@ test('documentation uses a neutral near-black palette in both themes', async ({ 
   await page.locator('#themeToggle').click();
   await expect(page.locator('body')).toHaveClass(/light/);
   await expect.poll(colors).toMatchObject({
-    sidebar: 'rgb(242, 244, 246)',
-    surface: 'rgb(250, 251, 252)',
+    sidebar: 'rgb(250, 250, 250)',
+    surface: 'rgb(255, 255, 255)',
     activeBackground: 'rgba(0, 0, 0, 0)',
     activeText: 'rgb(24, 24, 27)',
     article: 'rgb(36, 39, 44)',
@@ -426,13 +523,13 @@ for (const width of [1440, 800, 390]) {
       };
     });
     expect(short.bottom).toBeGreaterThan(0);
-    if (width > 680) expect(short.supportBottom).toBeLessThanOrEqual(900);
+    if (width > 940) expect(short.supportBottom).toBeLessThanOrEqual(900);
     await page.locator('#article').evaluate(element => { element.style.minHeight = '2200px'; });
     await page.locator('#readingLayout').evaluate(element => { element.scrollTop = 500; });
     await expect.poll(() => page.locator('#readingLayout').evaluate(element => element.scrollTop)).toBeGreaterThan(300);
     const header = await page.locator('.topbar').boundingBox();
     expect(Math.abs(header.y)).toBeLessThan(1);
-    if (width > 680) {
+    if (width > 940) {
       const support = await page.locator('#supportCard').boundingBox();
       expect(support.y).toBeGreaterThanOrEqual(0);
       expect(support.y + support.height).toBeLessThanOrEqual(900);
@@ -443,7 +540,7 @@ for (const width of [1440, 800, 390]) {
     await page.locator('#themeToggle').click();
     await expect(page.locator('body')).toHaveClass(/light/);
     await page.locator('#readingLayout').evaluate(element => element.scrollTo({ top: element.scrollHeight, behavior: 'instant' }));
-    if (width > 680) {
+    if (width > 940) {
       const bottom = await page.evaluate(() => {
         const footer = document.querySelector('.site-footer').getBoundingClientRect();
         const support = document.querySelector('#supportCard').getBoundingClientRect();
@@ -552,7 +649,7 @@ for (const width of [1440, 800, 390]) {
       return { footerLeft: footer.left, footerRight: footer.right, footerTop: footer.top,
         mainBottom: main.bottom, tocBottom: toc.bottom, themeRight: theme.right, accountLeft: account.left };
     });
-    const sidebarWidth = width > 680 ? (width > 1180 ? 238 : 250) : 0;
+    const sidebarWidth = width > 940 ? (width > 1180 ? 238 : 250) : 0;
     const readingBounds = await page.locator('#readingLayout').evaluate(element => {
       const rect = element.getBoundingClientRect();
       return { left: rect.left, right: rect.right - (element.offsetWidth - element.clientWidth) };

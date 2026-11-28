@@ -1,6 +1,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
+const { promisify } = require('node:util');
 const { obfuscate } = require('js-confuser');
 const { minify } = require('html-minifier-terser');
 const lightningcss = require('lightningcss');
@@ -8,6 +10,9 @@ const { prismBundle } = require('./prism-bundle');
 
 const publicRoot = path.join(__dirname, '..', 'public');
 const scripts = new Map([
+  ['/error-screen.js', 'error-screen.js'],
+  ['/profile-ui.js', 'profile-ui.js'],
+  ['/oauth-complete.js', 'oauth-complete.js'],
   ['/app.js', 'app.js'],
   ['/admin-updates.js', 'admin-updates.js'],
   ['/maintenance.js', 'maintenance.js'],
@@ -20,6 +25,8 @@ const documents = new Map([
   ['/maintenance.html', 'maintenance.html'],
 ]);
 const styles = new Map([
+  ['/buttons.css', 'buttons.css'],
+  ['/errors.css', 'errors.css'],
   ['/styles.css', 'styles.css'],
   ['/maintenance.css', 'maintenance.css'],
   ['/installer.css', 'installer.css'],
@@ -27,18 +34,56 @@ const styles = new Map([
   ['/vendor/sweetalert/sweetalert2.min.css', path.join('vendor', 'sweetalert', 'sweetalert2.min.css')],
 ]);
 const cache = new Map();
+const encodedAssets = new Map();
+const gzip = promisify(zlib.gzip);
+const brotli = promisify(zlib.brotliCompress);
+
+function encodedAsset(body, encoding) {
+  const key = encoding + ':' + crypto.createHash('sha256').update(body).digest('hex');
+  if (!encodedAssets.has(key)) {
+    const compressed = encoding === 'br'
+      ? brotli(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } })
+      : gzip(body, { level: 6 });
+    encodedAssets.set(key, compressed);
+    compressed.catch(() => encodedAssets.delete(key));
+    if (encodedAssets.size > 32) encodedAssets.delete(encodedAssets.keys().next().value);
+  }
+  return encodedAssets.get(key);
+}
+
+async function sendAsset(req, res, body) {
+  res.vary('Accept-Encoding');
+  res.set('ETag', 'W/"' + crypto.createHash('sha256').update(body).digest('base64url') + '"');
+  const encoding = req.acceptsEncodings('br', 'gzip', 'identity');
+  if (!encoding) return res.sendStatus(406);
+  if (encoding === 'identity' || (Buffer.byteLength(body) < 1024 && req.acceptsEncodings('identity')))
+    return res.send(body);
+  const compressed = await encodedAsset(body, encoding);
+  res.set('Content-Encoding', encoding);
+  return res.send(compressed);
+}
+
+async function preparePublicAssets({ installer = false } = {}) {
+  const files = installer
+    ? [['installer.html', 'html'], ['installer.js', 'js'], ['installer.css', 'css']]
+    : [['index.html', 'html'], ['app.js', 'js'], ['styles.css', 'css'], ['error-screen.js', 'js'], ['errors.css', 'css'], [styles.get('/vendor/fontawesome/css/all.min.css'), 'css']];
+  await Promise.all(files.map(async ([file, type]) => {
+    const body = await compiledAsset(file, type);
+    if (type !== 'html' && Buffer.byteLength(body) >= 1024)
+      await Promise.all([encodedAsset(body, 'br'), encodedAsset(body, 'gzip')]);
+  }));
+}
 const options = {
   target: 'browser',
   compact: true,
   minify: true,
   renameVariables: true,
   renameGlobals: true,
-  stringConcealing: true,
-  controlFlowFlattening: 0.15,
+  stringConcealing: false,
+  controlFlowFlattening: 0,
   pack: false,
 };
-// The main application is large; skip expensive transforms that caused a long cold start.
-const fastAppOptions = { ...options, stringConcealing: false, controlFlowFlattening: 0 };
+// Keep names obfuscated without expensive transforms on the first use of a tool.
 
 function composeAppScript(appSource, updatesSource) {
   return `(function(){\n${updatesSource}\n})();\n${appSource}`;
@@ -53,9 +98,9 @@ function invalidStaticPath(pathname) {
   );
 }
 
-async function obfuscateScript(source, isolate = false, fast = false) {
+async function obfuscateScript(source, isolate = false) {
   const input = isolate ? `(function(){\n${source}\n})();` : source;
-  const result = await obfuscate(input, fast ? fastAppOptions : options);
+  const result = await obfuscate(input, options);
   return result.code;
 }
 
@@ -63,11 +108,20 @@ async function compiledAsset(file, type) {
   const key = `${type}:${file}`;
   const filePath = path.join(publicRoot, file);
   const stat = await fs.promises.stat(filePath);
-  const signature = `${stat.size}:${stat.mtimeMs}`;
+  const dependency = file === 'app.js' ? 'error-screen.js' : file === 'styles.css' ? 'errors.css' : null;
+  const dependencyStat = dependency && await fs.promises.stat(path.join(publicRoot, dependency));
+  const signature = `${stat.size}:${stat.mtimeMs}:${dependencyStat ? `${dependencyStat.size}:${dependencyStat.mtimeMs}` : ''}`;
   const cached = cache.get(key);
   if (!cached || cached.signature !== signature) {
     const compilation = (async () => {
       let source = await fs.promises.readFile(filePath);
+      // Error screens must work with older HTML shells and blocked standalone assets.
+      if (dependency) {
+        const shared = await fs.promises.readFile(path.join(publicRoot, dependency));
+        source = file === 'app.js'
+          ? Buffer.from(`${shared.toString('utf8')}\n;\n${source.toString('utf8')}`)
+          : Buffer.from(`${source.toString('utf8')}\n${shared.toString('utf8')}`);
+      }
       if (type === 'html') {
         return minify(source.toString('utf8'), {
           collapseWhitespace: true,
@@ -77,7 +131,7 @@ async function compiledAsset(file, type) {
       }
       if (type === 'css')
         return lightningcss.transform({ filename: file, code: source, minify: true }).code.toString('utf8');
-      return obfuscateScript(source.toString('utf8'), !file.startsWith('vendor'), file === 'app.js');
+      return obfuscateScript(source.toString('utf8'), !file.startsWith('vendor'));
     })();
     const entry = { signature, compilation };
     cache.set(key, entry);
@@ -89,8 +143,10 @@ async function compiledAsset(file, type) {
 }
 
 async function appScriptVersion() {
-  const source = await fs.promises.readFile(path.join(publicRoot, 'app.js'));
-  return crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
+  const sources = await Promise.all(['app.js', 'error-screen.js'].map(file => fs.promises.readFile(path.join(publicRoot, file))));
+  const hash = crypto.createHash('sha256');
+  for (const source of sources) hash.update(source).update('\0');
+  return hash.digest('hex').slice(0, 16);
 }
 
 function sendPublicHtml(file, transformHtml) {
@@ -108,6 +164,10 @@ function sendPublicHtml(file, transformHtml) {
         }
       }
       if (file === 'index.html') {
+        // Both resources are already embedded in the compiled application assets.
+        body = body
+          .replace(/<link\b[^>]*href=(['"])\/errors\.css\1[^>]*>/i, '')
+          .replace(/<script\b[^>]*src=(['"])\/error-screen\.js\1[^>]*>\s*<\/script>/i, '');
         const version = await appScriptVersion();
         let replaced = false;
         body = body.replace(/src=(['"])\/app\.js(?:\?[^'"]*)?\1/i, (_match, quote) => {
@@ -175,7 +235,7 @@ function publicScripts(req, res, next) {
         'Cache-Control',
         versionedApp[1] === version ? 'public, max-age=31536000, immutable' : 'no-store, no-cache, must-revalidate',
       );
-      return res.type('js').send(body);
+      return sendAsset(req, res.type('js'), body);
     })().catch(next);
   }
   if (key === '/vendor/prism/prism.js') {
@@ -187,7 +247,7 @@ function publicScripts(req, res, next) {
     return cache.get('prism-bundle').compilation
       .then((body) => {
         res.set('Cache-Control', 'no-cache');
-        return res.type('js').send(body);
+        return sendAsset(req, res.type('js'), body);
       })
       .catch(next);
   }
@@ -196,7 +256,7 @@ function publicScripts(req, res, next) {
     return compiledAsset(file, 'js')
       .then((body) => {
         res.set('Cache-Control', 'no-cache');
-        return res.type('js').send(body);
+        return sendAsset(req, res.type('js'), body);
       })
       .catch(next);
   }
@@ -219,13 +279,17 @@ function publicStaticOnly(req, res, next) {
   }
   if (invalidStaticPath(pathname)) return next();
   const html = documents.get(pathname);
+  if (pathname === '/assets/fonts/roboto-mono-400.ttf')
+    return res.type('font/ttf').set('Cache-Control', 'public, max-age=86400').send(require('./error-font').data);
+  if (pathname === '/assets/fonts/license-roboto-mono')
+    return res.type('text/plain').send(require('./error-font').license);
   if (html) return sendPublicHtml(html)(req, res, next);
   const css = styles.get(pathname);
   if (css) {
     return compiledAsset(css, 'css')
       .then((body) => {
         res.set('Cache-Control', 'no-cache');
-        return res.type('css').send(body);
+        return sendAsset(req, res.type('css'), body);
       })
       .catch(next);
   }
@@ -264,4 +328,5 @@ module.exports = {
   publicStaticOnly,
   sendPublicHtml,
   sendStandaloneUpdaterHtml,
+  preparePublicAssets,
 };

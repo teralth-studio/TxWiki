@@ -20,7 +20,10 @@ test('page revision snapshots preserve the previous page state and revision acto
     content TEXT,
     updated_by INTEGER,
     page_updated_at TEXT,
-    revision_by INTEGER
+    revision_by INTEGER,
+    publication_status TEXT,
+    is_wip INTEGER,
+    tags TEXT
   )`);
   const connection = {
     execute: async (sql, values) => {
@@ -40,6 +43,7 @@ test('page revision snapshots preserve the previous page state and revision acto
     content: '{"en":"<p>Previous text</p>"}',
     updated_by: 7,
     updated_at: '2026-11-14 12:00:00',
+    publication_status: 'draft', is_wip: 1, tags: '["Documentation"]',
   };
 
   try {
@@ -50,6 +54,14 @@ test('page revision snapshots preserve the previous page state and revision acto
     assert.equal(revision.content, page.content);
     assert.equal(revision.updated_by, page.updated_by);
     assert.equal(revision.revision_by, 9);
+    assert.equal(revision.publication_status, 'draft');
+    assert.equal(revision.is_wip, 1);
+    assert.equal(revision.tags, page.tags);
+    await capturePageRevision(connection, { ...page, titles: JSON.parse(page.titles), content: JSON.parse(page.content), tags: ['Documentation'] }, 10);
+    const objectRevision = db.prepare('SELECT * FROM page_revisions WHERE revision_by=10').get();
+    assert.equal(objectRevision.titles, page.titles);
+    assert.equal(objectRevision.content, page.content);
+    assert.equal(objectRevision.tags, page.tags);
   } finally {
     db.close();
   }

@@ -27,6 +27,7 @@ const { requireCurrentAdminSession } = require('./scripts/admin-session');
 const { requirePrimaryAdmin, resolveSmtpPassword } = require('./scripts/smtp-security');
 const {
   SESSION_IDLE_MS,
+  credentialBinding,
   enforceAbsoluteSessionLifetime,
   rejectLegacySessions,
 } = require('./scripts/session-security');
@@ -39,6 +40,7 @@ const {
   publicStaticOnly,
   sendPublicHtml,
   sendStandaloneUpdaterHtml,
+  preparePublicAssets,
 } = require('./scripts/public-scripts');
 const { normalizeSiteOptions, normalizeSupportUrl } = require('./scripts/site-settings');
 const { HEADER_LINK_LIMIT, normalizeHeaderLink, normalizeHeaderLinks } = require('./scripts/header-links');
@@ -46,6 +48,7 @@ const { migrateSitePermissions } = require('./scripts/role-permissions');
 const { createAdminAuditMiddleware } = require('./scripts/admin-audit-log');
 const { ensureBackgroundJobHistory } = require('./scripts/background-job-history');
 const { capturePageRevision } = require('./scripts/page-revisions');
+const { publicationInput, publicPage, ensurePublicationSchema, registerPublicationRoutes } = require('./scripts/page-publication');
 const { ARCHIVE_NAME: themeSourceArchiveName, ensureThemeSourceArchive } = require('./scripts/theme-source-package');
 const { systemVersion } = require('./scripts/system-version');
 const {
@@ -273,6 +276,10 @@ const store = activeDatabaseType === 'sqlite'
   ? new SqliteSessionStore(pool)
   : new MySQLStore({ createDatabaseTable: true }, pool);
 const expectedTables = [
+  'user_profiles',
+  'oauth_connections',
+  'oauth_identities',
+  'profile_email_changes',
   'users',
   'spaces',
   'categories',
@@ -285,6 +292,8 @@ const expectedTables = [
   'roles',
   'background_jobs',
   'background_job_history',
+  'dashboard_visitors',
+  'dashboard_stats',
   'rate_limit_buckets',
   'admin_logs',
 ];
@@ -292,6 +301,7 @@ let schemaRepairPromise = null;
 let lastSchemaCheck = 0;
 const DUMMY_HASH = bcrypt.hashSync('not-a-real-user-password', 12);
 const smtpEnvConfig = {
+  enabled: process.env.SMTP_ENABLED !== 'false',
   host: String(process.env.SMTP_HOST || ''),
   port: Number(process.env.SMTP_PORT || 587),
   secure: process.env.SMTP_SECURE === 'true',
@@ -301,7 +311,7 @@ const smtpEnvConfig = {
 };
 let smtpConfig = { ...smtpEnvConfig };
 const buildMailer = (config) =>
-  config?.host && config?.from
+  config?.enabled !== false && config?.host && config?.from
     ? nodemailer.createTransport({
         host: config.host,
         port: config.port,
@@ -320,7 +330,7 @@ const validFontAwesomeIcon = (value) =>
   value.length <= 80 &&
   /^(?:(?:fa-solid|fa-regular|fa-brands)\s+)?fa-[a-z0-9-]+$/.test(value);
 const validStoredIcon = (value) =>
-  validFontAwesomeIcon(value) ||
+  value === 'none' || validFontAwesomeIcon(value) ||
   (typeof value === 'string' && /^\/media\/[A-Za-z0-9_-]{16}\.(?:png|jpg|gif|webp)$/.test(value));
 
 const htmlPolicy = {
@@ -636,6 +646,7 @@ const schemaIndexStatements = [
   'ALTER TABLE pages ADD COLUMN redirect_url VARCHAR(2048) NULL',
   'ALTER TABLE spaces ADD COLUMN home_page_slug VARCHAR(150) NULL',
   'ALTER TABLE spaces ADD COLUMN logo VARCHAR(500) NULL',
+  'ALTER TABLE spaces ADD COLUMN titles JSON NULL',
   'ALTER TABLE users ADD INDEX idx_users_temporary_expiration (must_change_password,temporary_password_expires_at)',
   "ALTER TABLE users MODIFY role VARCHAR(64) NOT NULL DEFAULT 'user'",
   'ALTER TABLE users ADD COLUMN is_primary_admin BOOLEAN NOT NULL DEFAULT FALSE',
@@ -700,7 +711,7 @@ async function applySchema() {
         two_factor_last_step: 'INTEGER NULL',
       },
       pages: { page_type: "TEXT NOT NULL DEFAULT 'content'", redirect_url: 'TEXT NULL' },
-      spaces: { home_page_slug: 'TEXT NULL', logo: 'TEXT NULL' },
+      spaces: { home_page_slug: 'TEXT NULL', logo: 'TEXT NULL', titles: 'TEXT NULL' },
       reactions: { user_id: 'INTEGER NULL' },
     };
     for (const [table, definitions] of Object.entries(additions)) {
@@ -724,6 +735,8 @@ async function applySchema() {
     }
   }
   await ensureBackgroundJobHistory(pool, activeDatabaseType);
+  await require('./scripts/profile-schema').ensureProfileSchema(pool);
+  await ensurePublicationSchema(pool);
   for (const statement of activeDatabaseType === 'mysql' ? schemaIndexStatements : []) {
     try {
       await pool.query(statement);
@@ -762,16 +775,18 @@ async function repairMissingTables(force = false) {
     const missing = expectedTables.filter((name) => !existing.has(name)),
       missingUserColumns = ['is_primary_admin', 'two_factor_secret', 'two_factor_recovery_codes', 'two_factor_last_step'].filter((name) => !columnsByTable.get('users')?.has(name)),
       missingReactionColumns = ['user_id'].filter((name) => !columnsByTable.get('reactions')?.has(name)),
-      missingPageColumns = ['page_type', 'redirect_url'].filter(
+      missingPageColumns = ['page_type', 'redirect_url', 'publication_status', 'is_wip', 'tags'].filter(
         (name) => !columnsByTable.get('pages')?.has(name),
       ),
-      missingSpaceColumns = ['home_page_slug', 'logo'].filter(
+      missingRevisionColumns = ['publication_status', 'is_wip', 'tags'].filter(name => !columnsByTable.get('page_revisions')?.has(name)),
+      missingSpaceColumns = ['home_page_slug', 'logo', 'titles'].filter(
         (name) => !columnsByTable.get('spaces')?.has(name),
       );
     if (
       force ||
       missing.length ||
       missingPageColumns.length ||
+      missingRevisionColumns.length ||
       missingSpaceColumns.length ||
       missingUserColumns.length ||
       missingReactionColumns.length
@@ -1033,6 +1048,7 @@ const userView = (u) =>
 const rolePermissionsDefault = [
   'captcha.configure',
   'admin.view',
+  'connections.manage',
   'pages.create_edit',
   'pages.delete',
   'categories.create_edit',
@@ -1076,12 +1092,9 @@ async function canUser(userId, permission) {
     'SELECT u.role,u.is_primary_admin,r.permissions FROM users u LEFT JOIN roles r ON r.role_key=u.role WHERE u.id=?',
     [userId],
   );
-  return (
-    !!row &&
-    (!!row.is_primary_admin ||
-      row.role === 'administrator' ||
-      (row.permissions && json(row.permissions).includes(permission)))
-  );
+  const required = Array.isArray(permission) ? permission : [permission],
+    granted = row?.permissions ? json(row.permissions) : [];
+  return !!row && required.some(key => row.is_primary_admin || row.role === 'administrator' || granted.includes(key));
 }
 const requirePermission = (permission) => (req, res, next) => {
   canUser(req.session.user?.id, permission)
@@ -1095,14 +1108,18 @@ const primaryAdminOnly = requirePrimaryAdmin(async (userId) => {
   return user;
 });
 const requireAnyPermission = (permissions) => (req, res, next) =>
-  Promise.all(permissions.map((permission) => canUser(req.session.user?.id, permission)))
-    .then((results) =>
-      results.some(Boolean) ? next() : res.status(403).json({ error: 'No tienes permiso para esta acción.' }),
+  canUser(req.session.user?.id, permissions)
+    .then((allowed) =>
+      allowed ? next() : res.status(403).json({ error: 'No tienes permiso para esta acción.' }),
     )
     .catch(next);
 async function publicUserView(user) {
   if (!user) return null;
-  const [role] = await query('SELECT name,color,permissions FROM roles WHERE role_key=?', [user.role]);
+  const [roles, profiles] = await Promise.all([
+    query('SELECT name,color,permissions FROM roles WHERE role_key=?', [user.role]),
+    query('SELECT preferred_language,avatar FROM user_profiles WHERE user_id=?', [user.id]),
+  ]);
+  const role = roles[0], profile = profiles[0];
   const permissions =
     user.is_primary_admin || user.role === 'administrator'
       ? [...rolePermissionsDefault]
@@ -1111,6 +1128,8 @@ async function publicUserView(user) {
         : json(role?.permissions) || [];
   return {
     ...userView(user),
+    preferredLanguage: profile?.preferred_language || null,
+    avatar: profile?.avatar || '',
     roleName: role?.name || user.role,
     roleColor: role?.color || '#64748b',
     permissions,
@@ -1174,7 +1193,10 @@ async function writeLanguageFile(entry, previousCode = '') {
 }
 
 async function invalidateUserSessions(userId, exceptSessionId = null) {
-  const candidates = await query('SELECT session_id,data FROM sessions WHERE data LIKE ?', [
+  const sqlite = activeDatabaseType === 'sqlite';
+  const candidates = await query(sqlite
+    ? 'SELECT sid AS session_id,data FROM sessions WHERE data LIKE ?'
+    : 'SELECT session_id,data FROM sessions WHERE data LIKE ?', [
     `%\"id\":${Number(userId)}%`,
   ]);
   for (const row of candidates) {
@@ -1182,7 +1204,7 @@ async function invalidateUserSessions(userId, exceptSessionId = null) {
       const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
       if (row.session_id !== exceptSessionId &&
           (Number(data.user?.id) === Number(userId) || Number(data.pendingTwoFactor?.id) === Number(userId)))
-        await query('DELETE FROM sessions WHERE session_id=?', [row.session_id]);
+        await query(sqlite ? 'DELETE FROM sessions WHERE sid=?' : 'DELETE FROM sessions WHERE session_id=?', [row.session_id]);
     } catch (error) {
       console.error('[Teralth Wiki] Could not invalidate a session:', error.code || error.name);
       throw error;
@@ -1437,8 +1459,8 @@ async function notifySecurityChange(user, template, subject, req) {
   }
   try {
     const now = new Date();
-    const date = new Intl.DateTimeFormat('es-EC', { dateStyle: 'long', timeZone: 'America/Guayaquil' }).format(now);
-    const hour = new Intl.DateTimeFormat('es-EC', { timeStyle: 'short', timeZone: 'America/Guayaquil' }).format(now);
+    const date = new Intl.DateTimeFormat('es-EC', { dateStyle: 'long', timeZone: backupTimeZone }).format(now);
+    const hour = new Intl.DateTimeFormat('es-EC', { timeStyle: 'short', timeZone: backupTimeZone }).format(now);
     await enqueueMail(user.email, subject, emailTemplate(template, {
       username: user.username, email: user.email, date, hour, ...(req ? loginDetails(req) : {}),
     }));
@@ -1466,8 +1488,10 @@ const auth = (req, res, next) => {
 app.use('/api', async (req, res, next) => {
   if (!req.session.user) return next();
   try {
-    const [current] = await query('SELECT two_factor_secret FROM users WHERE id=?', [req.session.user.id]);
-    if (current && twoFactorSessionBinding(req.session.user.id, current.two_factor_secret) === (req.session.twoFactorBinding || null))
+    const [current] = await query('SELECT password_hash,two_factor_secret FROM users WHERE id=?', [req.session.user.id]);
+    if (current && req.session.credentialBinding &&
+        credentialBinding(req.session.user.id, current.password_hash) === req.session.credentialBinding &&
+        twoFactorSessionBinding(req.session.user.id, current.two_factor_secret) === (req.session.twoFactorBinding || null))
       return next();
     req.session.regenerate((error) => {
       if (error) return next(error);
@@ -1537,6 +1561,7 @@ async function initialize() {
   if (savedSmtp) {
     const stored = json(savedSmtp.setting_value);
     smtpConfig = {
+      enabled: stored.enabled !== false,
       host: String(stored.host || ''),
       port: Number(stored.port || 587),
       secure: stored.secure === true,
@@ -1555,13 +1580,14 @@ async function initialize() {
       backupCronExpression = validateBackupCron(preferences.cron);
       backupTimeZone = validateTimeZone(preferences.timeZone || DEFAULT_TIME_ZONE);
       const retention = Number(preferences.retention);
-      if (Number.isInteger(retention) && retention >= 1 && retention <= 30) backupRetentionCount = retention;
+      if (Number.isInteger(retention) && retention >= 0 && retention <= 30) backupRetentionCount = retention;
     } catch {
       console.error(
         '[Teralth Wiki] Invalid backup CRON configuration; using the default value.',
       );
     }
   }
+  await loadSiteTimeZone(backupTimeZone);
   await query("INSERT IGNORE INTO spaces (slug,name,icon,sort_order) VALUES ('main',?,'fa-book-open',0)", [
     process.env.SITE_NAME || 'Teralth Wiki',
   ]);
@@ -1573,7 +1599,9 @@ async function initialize() {
     JSON.stringify(rolePermissionsDefault),
   ]);
   await migrateSitePermissions(pool);
-  await query("UPDATE users SET role='administrator' WHERE role='admin'");
+  // A custom role may legitimately have the slug "admin". Only migrate the
+  // legacy system alias; promoting a custom role would bypass its permissions.
+  await query("UPDATE users SET role='administrator' WHERE role='admin' AND NOT EXISTS (SELECT 1 FROM roles WHERE role_key='admin' AND is_system=FALSE)");
   await query("DELETE FROM roles WHERE role_key='admin' AND is_system=TRUE");
   const existing = await query('SELECT id FROM users WHERE username = ? LIMIT 1', [
     process.env.ADMIN_USERNAME || 'admin',
@@ -1685,6 +1713,7 @@ function isInsideBackup(target) {
   return resolved.startsWith(base);
 }
 async function pruneBackups() {
+  if (backupRetentionCount === 0) return;
   await fs.promises.mkdir(backupRoot, { recursive: true, mode: 0o700 });
   const backups = new Map();
   for (const entry of await fs.promises.readdir(backupRoot, { withFileTypes: true })) {
@@ -1741,6 +1770,7 @@ async function pruneBackups() {
     if (isInsideBackup(old.target)) await fs.promises.rm(old.target, { recursive: true, force: true });
 }
 async function createBackup(onProgress = () => {}) {
+  if (backupRetentionCount === 0) throw new Error('Backups are disabled.');
   await repairMissingTables();
   await fs.promises.mkdir(backupRoot, { recursive: true, mode: 0o700 });
   const now = new Date(),
@@ -1974,8 +2004,13 @@ function startBackgroundJobWorker() {
   );
   timer.unref();
 }
+async function loadSiteTimeZone(legacyZone) {
+  const [row] = await query("SELECT setting_value FROM settings WHERE setting_key='site'");
+  backupTimeZone = validateTimeZone((row && json(row.setting_value).timeZone) || legacyZone || DEFAULT_TIME_ZONE);
+}
 function scheduleBackupJob() {
   if (backupScheduleTimer) clearTimeout(backupScheduleTimer);
+  if (backupRetentionCount === 0) return;
   const next = nextCronDate(backupCronExpression, new Date(), backupTimeZone),
     delay = Math.max(1000, Math.min(2_147_000_000, next.getTime() - Date.now())),
     timer = setTimeout(async () => {
@@ -2066,7 +2101,21 @@ async function removeTemporaryUpload(file, directory, filenamePattern) {
     if (error.code !== 'ENOENT') throw error;
   }
 }
-const backupPersistentTables = ['users', 'spaces', 'categories', 'pages', 'settings', 'reactions', 'roles'];
+const backupPersistentTables = [
+  'user_profiles',
+  'oauth_connections',
+  'oauth_identities',
+  'profile_email_changes',
+  'users',
+  'spaces',
+  'categories',
+  'pages',
+  'settings',
+  'reactions',
+  'roles',
+  'dashboard_visitors',
+  'dashboard_stats',
+];
 async function listBackups() {
   await fs.promises.mkdir(backupRoot, { recursive: true, mode: 0o700 });
   const backups = new Map();
@@ -2088,7 +2137,7 @@ async function listBackups() {
   }
   return [...backups.values()]
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
-    .slice(0, backupRetentionCount);
+    .slice(0, backupRetentionCount || undefined);
 }
 async function restoreDatabaseSnapshot(snapshot) {
   if (
@@ -2100,6 +2149,8 @@ async function restoreDatabaseSnapshot(snapshot) {
     !Number.isFinite(Date.parse(snapshot.createdAt || ''))
   )
     throw new Error('BACKUP_DATABASE_INVALID');
+  for (const table of ['dashboard_visitors', 'dashboard_stats', 'user_profiles', 'oauth_connections', 'oauth_identities', 'profile_email_changes'])
+    if (snapshot.tables[table] === undefined) snapshot.tables[table] = [];
   for (const table of backupPersistentTables)
     if (!Array.isArray(snapshot.tables[table])) throw new Error('BACKUP_DATABASE_INVALID');
   let rowsTotal = 0;
@@ -2140,11 +2191,25 @@ async function restoreDatabaseSnapshot(snapshot) {
       if (!names.size) throw new Error('BACKUP_SCHEMA_MISMATCH');
       columnsByTable.set(table, names);
     }
-    for (const table of ['reactions', 'pages', 'categories', 'spaces', 'users', 'roles', 'settings'])
+    for (const table of [
+      'user_profiles',
+      'oauth_connections',
+      'oauth_identities',
+      'profile_email_changes',
+      'reactions',
+      'pages',
+      'categories',
+      'spaces',
+      'users',
+      'roles',
+      'settings',
+      'dashboard_visitors',
+      'dashboard_stats',
+    ])
       await connection.query('DELETE FROM ??', [table]);
     for (const table of backupPersistentTables) {
       const allowed = columnsByTable.get(table),
-        records = snapshot.tables[table];
+        records = snapshot.tables[table] || [];
       for (let offset = 0; offset < records.length; offset += 200) {
         const batch = records
           .slice(offset, offset + 200)
@@ -2416,11 +2481,14 @@ app.delete('/api/admin/themes/:slug', auth, requirePermission('themes.manage'), 
 });
 app.get('/api/config', async (req, res, next) => {
   try {
-    const settings = await query(
+    const [settings, spaces, themeState] = await Promise.all([
+      query(
         "SELECT setting_key,setting_value FROM settings WHERE setting_key IN ('site','languages','language_catalog','registration_enabled','captcha_settings','header_links')",
       ),
-      spaces = await query('SELECT slug,name,icon,logo FROM spaces ORDER BY sort_order,name'),
-      registration = settings.find((item) => item.setting_key === 'registration_enabled'),
+      query('SELECT slug,name,titles,icon,logo FROM spaces ORDER BY sort_order,name'),
+      resolveThemeState(),
+    ]);
+    const registration = settings.find((item) => item.setting_key === 'registration_enabled'),
       languageCatalogRow = settings.find((item) => item.setting_key === 'language_catalog'),
       headerLinksRow = settings.find((item) => item.setting_key === 'header_links'),
       siteRow = settings.find((item) => item.setting_key === 'site'),
@@ -2430,6 +2498,7 @@ app.get('/api/config', async (req, res, next) => {
       storedSite = siteRow ? json(siteRow.setting_value) : {},
       site = {
         ...storedSite,
+        timeZone: backupTimeZone,
         name: String(storedSite.name || process.env.SITE_NAME || 'Teralth Wiki'),
         pageTitle: String(storedSite.name || storedSite.pageTitle || process.env.SITE_NAME || 'Teralth Wiki'),
         favicon: String(storedSite.favicon || '/assets/favicon.svg'),
@@ -2437,7 +2506,6 @@ app.get('/api/config', async (req, res, next) => {
         sidebarLabel: storedSite.sidebarLabel || 'Documentation',
       },
       languageCatalog = languageCatalogRow ? json(languageCatalogRow.setting_value) : defaultLanguageCatalog;
-    const themeState = await resolveThemeState();
     res.json({
       site,
       languages,
@@ -2445,7 +2513,7 @@ app.get('/api/config', async (req, res, next) => {
       headerLinks: headerLinksRow
         ? normalizeHeaderLinks(json(headerLinksRow.setting_value), languages)
         : [],
-      spaces,
+      spaces: spaces.map(space => ({ ...space, titles: json(space.titles) || {} })),
       registrationEnabled: registration ? Boolean(json(registration.setting_value)) : false,
       theme: publicThemeView(themeState.saved.active, themeState.definition, themeState.values),
       captcha: publicCaptchaConfig(
@@ -2644,10 +2712,10 @@ app.post('/api/auth/register', loginLimiter, async (req, res, next) => {
       [userId, hash(raw)],
     );
     const now = new Date(),
-      date = new Intl.DateTimeFormat('es-EC', { dateStyle: 'long', timeZone: 'America/Guayaquil' }).format(
+      date = new Intl.DateTimeFormat('es-EC', { dateStyle: 'long', timeZone: backupTimeZone }).format(
         now,
       ),
-      hour = new Intl.DateTimeFormat('es-EC', { timeStyle: 'short', timeZone: 'America/Guayaquil' }).format(
+      hour = new Intl.DateTimeFormat('es-EC', { timeStyle: 'short', timeZone: backupTimeZone }).format(
         now,
       );
     await enqueueMail(
@@ -2700,8 +2768,8 @@ app.post('/api/auth/resend-verification', loginLimiter, async (req, res, next) =
     await conn.execute("INSERT INTO account_tokens (user_id,token_hash,purpose,expires_at) VALUES (?,?,'verify',DATE_ADD(NOW(),INTERVAL 24 HOUR))", [user.id, hash(raw)]);
     await enqueueMail(user.email, 'Confirm your account', emailTemplate('register.html', {
       username: user.username, email: user.email,
-      date: new Intl.DateTimeFormat('es-EC', { dateStyle: 'long', timeZone: 'America/Guayaquil' }).format(now),
-      hour: new Intl.DateTimeFormat('es-EC', { timeStyle: 'short', timeZone: 'America/Guayaquil' }).format(now),
+      date: new Intl.DateTimeFormat('es-EC', { dateStyle: 'long', timeZone: backupTimeZone }).format(now),
+      hour: new Intl.DateTimeFormat('es-EC', { timeStyle: 'short', timeZone: backupTimeZone }).format(now),
       verify_link: `${baseUrl(req)}/verify?token=${encodeURIComponent(raw)}`,
     }), conn);
     await conn.commit();
@@ -2715,10 +2783,16 @@ app.post('/api/auth/resend-verification', loginLimiter, async (req, res, next) =
 });
 function notifySuccessfulLogin(u, req) {
   if (!mailer) return;
+  query('SELECT login_notifications FROM user_profiles WHERE user_id=?', [u.id]).then(rows => {
+    if (rows[0] && !Number(rows[0].login_notifications)) return;
+    sendSuccessfulLoginNotification(u, req);
+  }).catch(error => console.error('Could not read sign-in notification preference:', error.code || 'Error'));
+}
+function sendSuccessfulLoginNotification(u, req) {
   try {
     const now = new Date();
-    const date = new Intl.DateTimeFormat('es-EC', { dateStyle: 'long', timeZone: 'America/Guayaquil' }).format(now);
-    const hour = new Intl.DateTimeFormat('es-EC', { timeStyle: 'short', timeZone: 'America/Guayaquil' }).format(now);
+    const date = new Intl.DateTimeFormat('es-EC', { dateStyle: 'long', timeZone: backupTimeZone }).format(now);
+    const hour = new Intl.DateTimeFormat('es-EC', { timeStyle: 'short', timeZone: backupTimeZone }).format(now);
     enqueueMail(u.email, 'New sign-in', emailTemplate('login_success.html', {
       username: u.username, email: u.email, date, hour, ...loginDetails(req),
     })).catch((error) =>
@@ -2778,6 +2852,7 @@ app.post('/api/auth/login', loginLimiter, loginAccountLimiter, async (req, res, 
       }));
     }
     req.session.user = userView(u);
+    req.session.credentialBinding = credentialBinding(u.id, u.password_hash);
     req.session.authenticatedAt = Date.now();
     req.session.csrfToken = token();
     req.session.save(async (e) => {
@@ -2806,6 +2881,12 @@ registerTwoFactorRoutes(app, {
   pool, query, auth, limiter: twoFactorLimiter, bcrypt, sessionSecret: process.env.SESSION_SECRET,
   token, userView, invalidateUserSessions, notifySuccessfulLogin, notifySecurityChange,
 });
+require('./scripts/profile-routes').registerProfileRoutes(app, {
+  pool, query, auth, limiter: loginLimiter, requirePermission,
+  sessionSecret: process.env.SESSION_SECRET, baseUrl, bcrypt, token, userView, publicUserView,
+  invalidateUserSessions, notifySuccessfulLogin, enqueueMail, verifyCaptcha,
+  mediaRoot: path.join(__dirname, 'images'), activeLanguages: activeHeaderLanguages,
+});
 app.post('/api/auth/password', auth, loginLimiter, async (req, res, next) => {
   try {
     const captchaValid = await verifyCaptcha(req, 'change');
@@ -2832,9 +2913,10 @@ app.post('/api/auth/password', auth, loginLimiter, async (req, res, next) => {
       return res
         .status(400)
         .json({ error: 'Usa 8 caracteres o más con mayúscula, minúscula, número y símbolo.' });
+    const nextPasswordHash = await bcrypt.hash(password, 12);
     await query(
       'UPDATE users SET password_hash=?,must_change_password=FALSE,previous_password_hash=NULL,temporary_password_expires_at=NULL WHERE id=?',
-      [await bcrypt.hash(password, 12), u.id],
+      [nextPasswordHash, u.id],
     );
     const notificationQueued = await notifySecurityChange(
       u, 'password_changed.html', 'Password updated',
@@ -2843,6 +2925,7 @@ app.post('/api/auth/password', auth, loginLimiter, async (req, res, next) => {
     await invalidateUserSessions(u.id);
     await new Promise((resolve, reject) => req.session.regenerate((e) => (e ? reject(e) : resolve())));
     req.session.user = { ...userView(u), mustChangePassword: false };
+    req.session.credentialBinding = credentialBinding(u.id, nextPasswordHash);
     req.session.authenticatedAt = Date.now();
     if (previousTwoFactorBinding) req.session.twoFactorBinding = previousTwoFactorBinding;
     req.session.csrfToken = token();
@@ -2890,11 +2973,11 @@ app.post('/api/auth/forgot', loginLimiter, async (req, res, next) => {
         );
         const date = new Intl.DateTimeFormat('es-EC', {
             dateStyle: 'long',
-            timeZone: 'America/Guayaquil',
+            timeZone: backupTimeZone,
           }).format(new Date()),
           hour = new Intl.DateTimeFormat('es-EC', {
             timeStyle: 'short',
-            timeZone: 'America/Guayaquil',
+            timeZone: backupTimeZone,
           }).format(new Date());
         await enqueueMail(
           u.email,
@@ -3033,6 +3116,15 @@ app.post('/api/auth/verify', async (req, res, next) => {
   }
 });
 
+app.get('/api/admin/categories', auth, requireAnyPermission(['categories.create_edit', 'categories.delete']), async (req, res, next) => {
+  try {
+    const rows = await query('SELECT id,parent_id,icon,names,sort_order,is_open FROM categories WHERE space_slug=? ORDER BY sort_order,id', [activeSpace(req)]);
+    res.set('Cache-Control', 'private, no-store').json({ categories: rows.map(row => ({ ...row, names: json(row.names) })) });
+  } catch (error) { next(error); }
+});
+registerPublicationRoutes(app, { query, auth, requirePermission, activeSpace, safePageContent });
+
+let lastDashboardRetention = 0;
 app.get('/api/pages', async (req, res, next) => {
   try {
     const space = activeSpace(req),
@@ -3040,14 +3132,50 @@ app.get('/api/pages', async (req, res, next) => {
       ipHash = userId ? '' : hash(req.ip + ':' + process.env.SESSION_SECRET),
       requestedSlug = String(req.query.slug || '').trim(),
       pageColumns =
-        'p.id,p.slug,p.icon,p.page_type,p.redirect_url,p.titles,p.content,p.category_id,p.sort_order,p.updated_at,p.updated_by,u.username AS updated_by_name';
+        'p.id,p.slug,p.icon,p.page_type,p.redirect_url,p.titles,p.content,p.category_id,p.sort_order,p.updated_at,p.updated_by,p.publication_status,p.is_wip,p.tags,u.username AS updated_by_name,up.avatar AS updated_by_avatar';
+    const viewer = req.session.user?.isPrimaryAdmin || req.session.user?.is_primary_admin || req.session.user?.role === 'administrator'
+      ? null
+      : req.session.user?.id
+        ? `user:${req.session.user.id}`
+        : `ip:${req.ip}`;
+    if (viewer) {
+      const day = new Intl.DateTimeFormat('en-CA', {
+        timeZone: backupTimeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date()),
+        visitorHash = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(viewer).digest('hex');
+      await query(
+        activeDatabaseType === 'sqlite'
+          ? 'INSERT OR IGNORE INTO dashboard_visitors (visit_day,visitor_hash) VALUES (?,?)'
+          : 'INSERT IGNORE INTO dashboard_visitors (visit_day,visitor_hash) VALUES (?,?)',
+        [day, visitorHash],
+      );
+      if (Date.now() - lastDashboardRetention > 86400000) {
+        const cutoff = new Date(Date.now() - 90 * 86400000);
+        await query('DELETE FROM dashboard_visitors WHERE visit_day<?', [new Intl.DateTimeFormat('en-CA', {
+          timeZone: backupTimeZone,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(cutoff)]);
+        await query('DELETE FROM dashboard_stats WHERE snapshot_day<?', [new Intl.DateTimeFormat('en-CA', {
+          timeZone: backupTimeZone,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(cutoff)]);
+        lastDashboardRetention = Date.now();
+      }
+    }
     const selectedPageSql = requestedSlug
-      ? `SELECT ${pageColumns} FROM pages p LEFT JOIN users u ON u.id=p.updated_by WHERE p.space_slug=? AND p.slug=? LIMIT 1`
-      : `SELECT ${pageColumns} FROM pages p LEFT JOIN users u ON u.id=p.updated_by LEFT JOIN spaces s ON s.slug=p.space_slug WHERE p.space_slug=? ORDER BY (p.slug=s.home_page_slug) DESC,p.sort_order,p.slug LIMIT 1`;
+      ? `SELECT ${pageColumns} FROM pages p LEFT JOIN users u ON u.id=p.updated_by LEFT JOIN user_profiles up ON up.user_id=p.updated_by WHERE p.space_slug=? AND p.publication_status='published' AND p.slug=? LIMIT 1`
+      : `SELECT ${pageColumns} FROM pages p LEFT JOIN users u ON u.id=p.updated_by LEFT JOIN user_profiles up ON up.user_id=p.updated_by LEFT JOIN spaces s ON s.slug=p.space_slug WHERE p.space_slug=? AND p.publication_status='published' ORDER BY (p.slug=s.home_page_slug) DESC,p.sort_order,p.slug LIMIT 1`;
     const selectedParams = requestedSlug ? [space, slugify(requestedSlug)] : [space];
     const [pages, categories, spaces, selectedRows] = await Promise.all([
       query(
-        'SELECT id,slug,icon,page_type,redirect_url,titles,category_id,sort_order FROM pages WHERE space_slug=? ORDER BY category_id,sort_order,slug',
+        "SELECT id,slug,icon,page_type,redirect_url,titles,category_id,sort_order,tags,is_wip FROM pages WHERE space_slug=? AND publication_status='published' ORDER BY category_id,sort_order,slug",
         [space],
       ),
       query(
@@ -3057,7 +3185,7 @@ app.get('/api/pages', async (req, res, next) => {
       query('SELECT home_page_slug FROM spaces WHERE slug=?', [space]),
       query(selectedPageSql, selectedParams),
     ]);
-    const selected = selectedRows[0];
+    const selected = await publicPage(selectedRows[0], query, safePageContent);
     let reactions = [],
       myReaction = null;
     if (selected) {
@@ -3075,11 +3203,11 @@ app.get('/api/pages', async (req, res, next) => {
     }
     res.set('Cache-Control', 'private, no-store');
     res.json({
-      pages: pages.map((page) => ({ ...page, titles: json(page.titles) })),
+      pages: pages.map((page) => ({ ...page, titles: json(page.titles), tags: json(page.tags) || [] })),
       categories: categories.map((category) => ({ ...category, names: json(category.names) })),
       homePageSlug: spaces[0]?.home_page_slug || null,
       page: selected
-        ? { ...selected, titles: json(selected.titles), content: safePageContent(selected.content) }
+        ? selected
         : null,
       reactions,
       myReaction,
@@ -3092,10 +3220,10 @@ app.get('/api/pages/:slug', async (req, res, next) => {
   try {
     const space = activeSpace(req),
       [p] = await query(
-        'SELECT p.id,p.slug,p.icon,p.page_type,p.redirect_url,p.titles,p.content,p.category_id,p.updated_at,p.updated_by,u.username AS updated_by_name FROM pages p LEFT JOIN users u ON u.id=p.updated_by WHERE p.space_slug=? AND p.slug=? LIMIT 1',
+        'SELECT p.id,p.slug,p.icon,p.page_type,p.redirect_url,p.titles,p.content,p.category_id,p.updated_at,p.updated_by,p.publication_status,p.is_wip,p.tags,u.username AS updated_by_name,up.avatar AS updated_by_avatar FROM pages p LEFT JOIN users u ON u.id=p.updated_by LEFT JOIN user_profiles up ON up.user_id=p.updated_by WHERE p.space_slug=? AND p.slug=? LIMIT 1',
         [space, slugify(req.params.slug)],
       );
-    if (!p) return res.status(404).json({ error: 'No encontramos esa página.' });
+    if (!p || p.publication_status === 'draft') return res.status(404).json({ error: 'No encontramos esa página.' });
     const identityColumn = req.session.user ? 'user_id' : 'ip_hash',
       identityValue = req.session.user
         ? req.session.user.id
@@ -3109,7 +3237,7 @@ app.get('/api/pages/:slug', async (req, res, next) => {
     ]);
     res.set('Cache-Control', 'private, no-store');
     res.json({
-      page: { ...p, titles: json(p.titles), content: safePageContent(p.content) },
+      page: await publicPage(p, query, safePageContent),
       reactions: reactions.map((row) => ({ mood: row.mood, count: Number(row.count) })),
       myReaction: own[0]?.mood || null,
     });
@@ -3124,7 +3252,7 @@ app.post('/api/pages/:id/reactions', reactionLimiter, async (req, res, next) => 
     if (!['happy', 'neutral', 'sad'].includes(mood))
       return res.status(400).json({ error: 'Reacción no válida.' });
     const space = activeSpace(req),
-      [page] = await query('SELECT id FROM pages WHERE id=? AND space_slug=?', [req.params.id, space]);
+      [page] = await query("SELECT id FROM pages WHERE id=? AND space_slug=? AND publication_status='published' AND is_wip=0", [req.params.id, space]);
     if (!page) return res.status(404).json({ error: 'Página no encontrada.' });
     const logged = Boolean(req.session.user),
       ipHash = logged
@@ -3223,7 +3351,7 @@ app.get(
           retention: backupRetentionCount,
           timeZone: backupTimeZone,
           timeZones: backupTimeZones,
-          nextRunAt: nextCronDate(backupCronExpression, new Date(), backupTimeZone).toISOString(),
+          nextRunAt: backupRetentionCount ? nextCronDate(backupCronExpression, new Date(), backupTimeZone).toISOString() : null,
           backups: await listBackups(),
           creating: pendingBackups.length > 0,
           permissions: {
@@ -3244,6 +3372,7 @@ app.post(
   backupCreateLimiter,
   async (req, res, next) => {
     try {
+      if (backupRetentionCount === 0) return res.status(409).json({ error: 'Backups are disabled.' });
       const pending = await query(
         "SELECT id FROM background_jobs WHERE job_type='backup' AND status IN ('queued','processing') LIMIT 1",
       );
@@ -3260,12 +3389,18 @@ app.post(
 app.get('/api/admin/updates', auth, requirePermission('updates.install'), async (req, res, next) => {
   try {
     await ensureUpdateTables(pool);
-    const [rows] = await pool.execute(
-      'SELECT update_id,release_version,applied_at FROM wiki_updates ORDER BY applied_at DESC LIMIT 10',
+    const [counts] = await pool.query('SELECT COUNT(*) AS total FROM wiki_updates');
+    const totalPages = Math.max(1, Math.ceil(Number(counts[0].total) / 5));
+    const page = Math.min(totalPages, Math.max(1, Number.parseInt(req.query.page, 10) || 1));
+    const [rows] = await pool.query(
+      'SELECT update_id,release_version,applied_at FROM wiki_updates ORDER BY applied_at DESC,update_id DESC LIMIT 5 OFFSET ?',
+      [(page - 1) * 5],
     );
+    const [latest] = page === 1 ? [rows] : await pool.query('SELECT release_version FROM wiki_updates ORDER BY applied_at DESC,update_id DESC LIMIT 1');
     res.set('Cache-Control', 'private, no-store').json({
       configured: Boolean(updatePublicKey),
-      currentVersion: rows[0]?.release_version || systemVersion(),
+      currentVersion: latest[0]?.release_version || systemVersion(),
+      page, totalPages,
       updates: rows,
     });
   } catch (error) {
@@ -3542,17 +3677,16 @@ app.put(
   async (req, res, next) => {
     try {
       const cron = validateBackupCron(req.body.cron),
-        timeZone = validateTimeZone(req.body.timeZone || DEFAULT_TIME_ZONE),
+        timeZone = backupTimeZone,
         retention = Number(req.body.retention);
-      if (!Number.isInteger(retention) || retention < 1 || retention > 30)
-        return res.status(400).json({ error: 'La retención debe estar entre 1 y 30 copias.' });
+      if (!Number.isInteger(retention) || retention < 0 || retention > 30)
+        return res.status(400).json({ error: 'La retención debe estar entre 0 y 30 copias.' });
       nextCronDate(cron, new Date(), timeZone);
       await query(
         "INSERT INTO settings (setting_key,setting_value) VALUES ('backup_settings',?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)",
         [JSON.stringify({ cron, retention, timeZone })],
       );
       backupCronExpression = cron;
-      backupTimeZone = timeZone;
       backupRetentionCount = retention;
       await pruneBackups();
       scheduleBackupJob();
@@ -3561,7 +3695,7 @@ app.put(
         cron,
         retention,
         timeZone,
-        nextRunAt: nextCronDate(backupCronExpression, new Date(), backupTimeZone).toISOString(),
+        nextRunAt: backupRetentionCount ? nextCronDate(backupCronExpression, new Date(), backupTimeZone).toISOString() : null,
       });
     } catch (error) {
       if (error.message === 'TIME_ZONE_INVALID')
@@ -3674,7 +3808,7 @@ app.post(
         backupTimeZone = validateTimeZone(preferences.timeZone || DEFAULT_TIME_ZONE);
         if (
           Number.isInteger(Number(preferences.retention)) &&
-          Number(preferences.retention) >= 1 &&
+          Number(preferences.retention) >= 0 &&
           Number(preferences.retention) <= 30
         )
           backupRetentionCount = Number(preferences.retention);
@@ -3689,6 +3823,7 @@ app.post(
             }),
           ],
         );
+      await loadSiteTimeZone(restoredSchedule ? backupTimeZone : DEFAULT_TIME_ZONE);
       scheduleBackupJob();
       await pruneBackups();
       req.session.destroy((error) => {
@@ -3739,6 +3874,7 @@ app.post(
   },
 );
 const rolePermissionKeys = [
+  'connections.manage',
   'captcha.configure',
   'admin.view',
   'pages.create_edit',
@@ -3776,6 +3912,7 @@ async function activeHeaderLanguages() {
   const languages = row ? json(row.setting_value) : ['en', 'es'];
   return Array.isArray(languages) && languages.length ? languages : ['en', 'es'];
 }
+require('./scripts/space-management').registerNavigationRoutes({ app, auth, requirePermission, pool, activeHeaderLanguages, validFontAwesomeIcon });
 app.get('/api/admin/header-links', auth, async (req, res, next) => {
   try {
     const userId = req.session.user.id,
@@ -3936,6 +4073,54 @@ app.get('/api/admin/logs', auth, requirePermission('logs.view'), async (req, res
     next(error);
   }
 });
+app.get('/api/admin/dashboard', auth, requirePermission('admin.view'), async (req, res, next) => {
+  try {
+    const formatDay = (date) => new Intl.DateTimeFormat('en-CA', {
+        timeZone: backupTimeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(date),
+      today = formatDay(new Date()),
+      start = new Date(Date.now() - 29 * 86400000),
+      fromDay = formatDay(start),
+      [userRows, pageRows, reactionRows, visitors, dailyVisitors] = await Promise.all([
+        query('SELECT COUNT(*) AS total FROM users'),
+        query("SELECT COUNT(*) AS total FROM pages WHERE publication_status='published'"),
+        query('SELECT mood,COUNT(*) AS total FROM reactions GROUP BY mood'),
+        query('SELECT COUNT(DISTINCT visitor_hash) AS total FROM dashboard_visitors WHERE visit_day>=?', [fromDay]),
+        query('SELECT visit_day AS day,COUNT(*) AS total FROM dashboard_visitors WHERE visit_day>=? GROUP BY visit_day ORDER BY visit_day', [fromDay]),
+      ]),
+      reactions = { happy: 0, neutral: 0, sad: 0 };
+    for (const row of reactionRows) if (Object.hasOwn(reactions, row.mood)) reactions[row.mood] = Number(row.total || 0);
+    const values = {
+      visitors: Number(dailyVisitors.find((row) => row.day === today)?.total || 0),
+      users: Number(userRows[0]?.total || 0),
+      pages: Number(pageRows[0]?.total || 0),
+      happy: reactions.happy,
+      neutral: reactions.neutral,
+      sad: reactions.sad,
+    };
+    const snapshotSql = activeDatabaseType === 'sqlite'
+      ? 'INSERT INTO dashboard_stats (snapshot_day,visitor_count,users_count,pages_count,happy_count,neutral_count,sad_count) VALUES (?,?,?,?,?,?,?) ON CONFLICT(snapshot_day) DO UPDATE SET visitor_count=excluded.visitor_count,users_count=excluded.users_count,pages_count=excluded.pages_count,happy_count=excluded.happy_count,neutral_count=excluded.neutral_count,sad_count=excluded.sad_count,captured_at=CURRENT_TIMESTAMP'
+      : 'INSERT INTO dashboard_stats (snapshot_day,visitor_count,users_count,pages_count,happy_count,neutral_count,sad_count) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE visitor_count=VALUES(visitor_count),users_count=VALUES(users_count),pages_count=VALUES(pages_count),happy_count=VALUES(happy_count),neutral_count=VALUES(neutral_count),sad_count=VALUES(sad_count),captured_at=CURRENT_TIMESTAMP';
+    await query(snapshotSql, [today, values.visitors, values.users, values.pages, values.happy, values.neutral, values.sad]);
+    const series = await query(
+      'SELECT snapshot_day AS day,visitor_count AS visitors,users_count AS users,pages_count AS pages,happy_count AS happy,neutral_count AS neutral,sad_count AS sad FROM dashboard_stats WHERE snapshot_day>=? ORDER BY snapshot_day',
+      [fromDay],
+    );
+    res.set('Cache-Control', 'private, no-store').json({
+      version: systemVersion(),
+      timeZone: backupTimeZone,
+      totals: { ...values, visitors: Number(visitors[0]?.total || 0), reactions: reactions.happy + reactions.neutral + reactions.sad },
+      reactions,
+      series: series.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, ['day'].includes(key) ? value : Number(value || 0)]))),
+      updatePermission: await canUser(req.session.user.id, 'updates.install'),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 app.get('/api/admin/jobs', auth, requirePermission('logs.view'), async (req, res, next) => {
   try {
     const rawPage = req.query.page === undefined ? '1' : String(req.query.page),
@@ -3975,21 +4160,21 @@ app.put('/api/admin/roles', auth, requirePermission('roles.manage'), async (req,
       roles.filter((role) => role.roleKey === 'user').length !== 1
     )
       return res.status(400).json({ error: 'Los roles base no se pueden quitar.' });
-    for (const role of submitted) {
+    for (const role of roles) {
       if (
         !role ||
         typeof role.name !== 'string' ||
         !role.name.trim() ||
         role.name.trim().length > 80 ||
         !/^#[0-9a-fA-F]{6}$/.test(role.color) ||
-        !Array.isArray(role.permissions) ||
+        !['administrator', 'user'].includes(role.roleKey) && (!Array.isArray(role.permissions) ||
         role.permissions.some((permission) => !rolePermissionKeys.includes(permission)) ||
-        new Set(role.permissions).size !== role.permissions.length
+        new Set(role.permissions).size !== role.permissions.length)
       )
         return res.status(400).json({ error: 'Revisa el nombre, color y permisos de cada rol.' });
     }
-    const names = submitted.map((role) => role.name.trim().toLocaleLowerCase());
-    if (new Set(names).size !== names.length || names.includes('administrator') || names.includes('user'))
+    const names = roles.map((role) => role.name.trim().toLocaleLowerCase());
+    if (new Set(names).size !== names.length)
       return res.status(400).json({ error: 'Los nombres de los roles deben ser únicos.' });
     const [actor] = await query(
       'SELECT u.role,u.is_primary_admin,r.permissions FROM users u LEFT JOIN roles r ON r.role_key=u.role WHERE u.id=?',
@@ -4010,6 +4195,9 @@ app.put('/api/admin/roles', auth, requirePermission('roles.manage'), async (req,
     const [existingRows] = await conn.query('SELECT role_key,is_system FROM roles');
     const known = new Map(existingRows.map((row) => [row.role_key, row]));
     const activeKeys = new Set(['administrator', 'user']);
+    for (const base of roles.filter(role => activeKeys.has(role.roleKey))) {
+      await conn.execute('UPDATE roles SET name=?,color=? WHERE role_key=? AND is_system=TRUE', [base.name.trim(), base.color, base.roleKey]);
+    }
     for (const item of submitted) {
       let roleKey = String(item.roleKey || '').trim();
       if (!roleKey || !known.has(roleKey)) {
@@ -4049,6 +4237,7 @@ app.get('/api/admin/smtp', auth, primaryAdminOnly, async (req, res, next) => {
   try {
     res.json({
       smtp: {
+        enabled: smtpConfig.enabled !== false && Boolean(smtpConfig.host),
         host: smtpConfig.host,
         port: smtpConfig.port,
         secure: smtpConfig.secure,
@@ -4140,6 +4329,17 @@ app.post('/api/admin/smtp/test', auth, primaryAdminOnly, async (req, res, next) 
 });
 app.put('/api/admin/smtp', auth, primaryAdminOnly, async (req, res, next) => {
   try {
+    if (req.body.enabled === false) {
+      const { password, ...fields } = smtpConfig;
+      await query(
+        "INSERT INTO settings (setting_key,setting_value) VALUES ('smtp',?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)",
+        [JSON.stringify({ ...fields, enabled: false, passwordEncrypted: password ? encryptSmtpPassword(password) : '' })],
+      );
+      smtpConfig = { ...smtpConfig, enabled: false };
+      mailer = null;
+      smtpProofs.delete(req.sessionID);
+      return res.json({ ok: true });
+    }
     const host = String(req.body.host || '').trim(),
       port = Number(req.body.port || 587),
       secure = req.body.secure === true,
@@ -4210,6 +4410,9 @@ app.delete('/api/admin/users/:id', auth, requirePermission('users.delete'), asyn
       await conn.rollback();
       return res.status(403).json({ error: 'La cuenta principal del sitio no se puede eliminar.' });
     }
+    await conn.execute('DELETE FROM oauth_identities WHERE user_id=?', [id]);
+    await conn.execute('DELETE FROM user_profiles WHERE user_id=?', [id]);
+    await conn.execute('DELETE FROM profile_email_changes WHERE user_id=?', [id]);
     await conn.execute('DELETE FROM users WHERE id=?', [id]);
     await conn.commit();
     await invalidateUserSessions(id);
@@ -4273,15 +4476,15 @@ app.post(
       );
       const date = new Intl.DateTimeFormat('es-EC', {
           dateStyle: 'long',
-          timeZone: 'America/Guayaquil',
+          timeZone: backupTimeZone,
         }).format(new Date()),
-        hour = new Intl.DateTimeFormat('es-EC', { timeStyle: 'short', timeZone: 'America/Guayaquil' }).format(
+        hour = new Intl.DateTimeFormat('es-EC', { timeStyle: 'short', timeZone: backupTimeZone }).format(
           new Date(),
         ),
         expiresAt = new Intl.DateTimeFormat('es-EC', {
           dateStyle: 'short',
           timeStyle: 'short',
-          timeZone: 'America/Guayaquil',
+          timeZone: backupTimeZone,
         }).format(new Date(Date.now() + 3600000));
       await enqueueMail(
         user.email,
@@ -4315,7 +4518,7 @@ app.get(
     try {
       res.json({
         users: await query(
-          'SELECT id,email,username,role,verified_at,created_at,is_primary_admin AS isPrimaryAdmin FROM users ORDER BY created_at DESC',
+          'SELECT u.id,u.email,u.username,u.role,u.verified_at,u.created_at,u.is_primary_admin AS isPrimaryAdmin,p.avatar FROM users u LEFT JOIN user_profiles p ON p.user_id=u.id ORDER BY u.created_at DESC',
         ),
         roles: await getRoleCatalog(),
       });
@@ -4356,6 +4559,7 @@ app.patch('/api/admin/users/:id/role', auth, requirePermission('users.role'), as
       return res.status(404).json({ error: 'Usuario no verificado o no encontrado.' });
     if (targetId === Number(req.session.user.id)) {
       const previousTwoFactorBinding = req.session.twoFactorBinding;
+      const previousCredentialBinding = req.session.credentialBinding;
       await invalidateUserSessions(targetId);
       await new Promise((resolve, reject) =>
         req.session.regenerate((error) => (error ? reject(error) : resolve())),
@@ -4365,6 +4569,7 @@ app.patch('/api/admin/users/:id/role', auth, requirePermission('users.role'), as
         [targetId],
       );
       req.session.user = userView(updated);
+      req.session.credentialBinding = previousCredentialBinding;
       if (previousTwoFactorBinding) req.session.twoFactorBinding = previousTwoFactorBinding;
       req.session.csrfToken = token();
       await new Promise((resolve, reject) =>
@@ -4598,7 +4803,11 @@ app.patch('/api/admin/spaces/:slug/logo', auth, requirePermission('spaces.edit')
 });
 app.put('/api/admin/settings', auth, async (req, res, next) => {
   try {
-    const { name, logo, spaces, supportUrl } = req.body,
+    const [siteRow] = await query("SELECT setting_value FROM settings WHERE setting_key='site'");
+    const oldSite = siteRow ? json(siteRow.setting_value) : {};
+    const { spaces, supportUrl } = req.body,
+      name = req.body.name === undefined ? String(oldSite.name || process.env.SITE_NAME || 'Teralth Wiki') : req.body.name,
+      logo = req.body.logo === undefined ? oldSite.logo || '' : req.body.logo,
       pageTitle = req.body.pageTitle,
       favicon = req.body.favicon,
       sidebarLabel = req.body.sidebarLabel;
@@ -4617,13 +4826,13 @@ app.put('/api/admin/settings', auth, async (req, res, next) => {
         .status(400)
         .json({ error: 'Revisa los nombres del sitio, el título de página y la lista de espacios.' });
     const preUsedSlugs = new Set(),
-      preReserved = new Set(['api', 'login', 'register', 'reset', 'admin', 'verify', 'media', 'two-factor', 'two-factor-setup']);
+      preReserved = new Set(['api', 'login', 'register', 'reset', 'admin', 'verify', 'media', 'profile', 'auth', 'two-factor', 'two-factor-setup']);
     for (const sp of spaces || []) {
       if (!sp || typeof sp !== 'object' || Array.isArray(sp))
         return res.status(400).json({ error: 'Uno de los espacios no es válido o está duplicado.' });
       const normalized = spaceSlugify(sp.slug || sp.name);
       if (
-        !validFontAwesomeIcon(String(sp.icon || 'fa-book-open')) ||
+        (sp.icon !== 'none' && !validFontAwesomeIcon(String(sp.icon || 'fa-book-open'))) ||
         (String(sp.logo || '') && !/^\/media\/[A-Za-z0-9_-]{16}\.(?:png|jpg|gif|webp)$/.test(String(sp.logo)))
       )
         return res
@@ -4640,9 +4849,18 @@ app.put('/api/admin/settings', auth, async (req, res, next) => {
         return res.status(400).json({ error: 'Uno de los espacios no es válido o está duplicado.' });
       preUsedSlugs.add(normalized);
     }
-    const [siteRow] = await query("SELECT setting_value FROM settings WHERE setting_key='site'");
-    const oldSite = siteRow ? json(siteRow.setting_value) : {};
     const options = normalizeSiteOptions(req.body, oldSite);
+    if (req.body.timeZone !== undefined) {
+      if (!(await canUser(req.session.user.id, 'settings.identity'))) return res.status(403).json({ error: 'You cannot change the site time zone.' });
+      if (!backupTimeZones.includes(req.body.timeZone)) return res.status(400).json({ error: 'Invalid time zone.' });
+      options.timeZone = req.body.timeZone;
+    }
+    if (req.body.wipContent !== undefined) {
+      if (!(await canUser(req.session.user.id, 'settings.identity'))) return res.status(403).json({ error: 'You cannot change maintenance content.' });
+      const value = req.body.wipContent, languages = await languageKeys();
+      if (!value || typeof value !== 'object' || Array.isArray(value) || Object.entries(value).some(([key, content]) => !languages.includes(key) || typeof content !== 'string' || content.length > 100000)) return res.status(400).json({ error: 'Invalid maintenance content.' });
+      options.wipContent = Object.fromEntries(Object.entries(value).map(([key, content]) => [key, clean(content)]));
+    }
     const normalizedSupportUrl = normalizeSupportUrl(supportUrl === undefined ? String(oldSite.supportUrl || '') : supportUrl);
     const normalizedPageTitle = name.trim(),
       normalizedFavicon = String(
@@ -4723,9 +4941,13 @@ app.put('/api/admin/settings', auth, async (req, res, next) => {
         }),
       ],
     );
+    if (options.timeZone && options.timeZone !== backupTimeZone) {
+      backupTimeZone = options.timeZone;
+      scheduleBackupJob();
+    }
     if (spaces !== undefined) {
       const usedSlugs = new Set();
-      const reserved = new Set(['api', 'login', 'register', 'reset', 'admin', 'verify', 'media', 'two-factor', 'two-factor-setup']);
+      const reserved = new Set(['api', 'login', 'register', 'reset', 'admin', 'verify', 'media', 'profile', 'auth', 'two-factor', 'two-factor-setup']);
       for (let i = 0; i < spaces.length; i++) {
         const sp = spaces[i],
           slug = spaceSlugify(sp.slug || sp.name);
@@ -4762,6 +4984,7 @@ app.put('/api/admin/pages/:slug', auth, requirePermission('pages.create_edit'), 
   let slug = '';
   try {
     slug = slugify(req.params.slug);
+    const publication = publicationInput(req.body);
     const titles = req.body.titles,
       content = req.body.content || {},
       pageType = req.body.pageType === 'redirect' ? 'redirect' : 'content',
@@ -4805,10 +5028,10 @@ app.put('/api/admin/pages/:slug', auth, requirePermission('pages.create_edit'), 
         ([language, value]) =>
           !validLanguageCode(language) || !languages.includes(language) || typeof value !== 'string',
       ) ||
-      !Object.values(content).some((value) => value.trim())
+      (publication.status !== 'draft' && !Object.values(content).some((value) => value.trim()))
     )
       return res.status(400).json({ error: 'Agrega contenido en al menos un idioma activo.' });
-    const categoryId = pageType === 'content' && req.body.categoryId ? Number(req.body.categoryId) : null;
+    const categoryId = req.body.categoryId ? Number(req.body.categoryId) : null;
     if (categoryId) {
       const [category] = await query('SELECT id FROM categories WHERE id=? AND space_slug=?', [
         categoryId,
@@ -4824,13 +5047,13 @@ app.put('/api/admin/pages/:slug', auth, requirePermission('pages.create_edit'), 
     try {
       await connection.beginTransaction();
       const [existingRows] = await connection.execute(
-        'SELECT id,space_slug,slug,category_id,icon,page_type,redirect_url,sort_order,titles,content,updated_by,updated_at FROM pages WHERE space_slug=? AND slug=? LIMIT 1 FOR UPDATE',
+        'SELECT id,space_slug,slug,category_id,icon,page_type,redirect_url,sort_order,titles,content,publication_status,is_wip,tags,updated_by,updated_at FROM pages WHERE space_slug=? AND slug=? LIMIT 1 FOR UPDATE',
         [space, slug],
       );
       if (existingRows[0])
         await capturePageRevision(connection, existingRows[0], req.session.user.id);
       await connection.execute(
-        'INSERT INTO pages (space_slug,category_id,slug,icon,page_type,redirect_url,titles,content,updated_by) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE category_id=VALUES(category_id),icon=VALUES(icon),page_type=VALUES(page_type),redirect_url=VALUES(redirect_url),titles=VALUES(titles),content=VALUES(content),updated_by=VALUES(updated_by),updated_at=UTC_TIMESTAMP()',
+        'INSERT INTO pages (space_slug,category_id,slug,icon,page_type,redirect_url,titles,content,updated_by,publication_status,is_wip,tags) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE publication_status=VALUES(publication_status),is_wip=VALUES(is_wip),tags=VALUES(tags), category_id=VALUES(category_id),icon=VALUES(icon),page_type=VALUES(page_type),redirect_url=VALUES(redirect_url),titles=VALUES(titles),content=VALUES(content),updated_by=VALUES(updated_by),updated_at=UTC_TIMESTAMP()',
         [
           space,
           categoryId,
@@ -4841,6 +5064,7 @@ app.put('/api/admin/pages/:slug', auth, requirePermission('pages.create_edit'), 
           JSON.stringify(titles),
           JSON.stringify(safeContent),
           req.session.user.id,
+          publication.status, publication.isWip, JSON.stringify(publication.tags),
         ],
       );
       await connection.commit();
@@ -4924,7 +5148,7 @@ app.put(
         return res.status(404).json({ error: 'No se encontró la revisión seleccionada.' });
       }
       const [currentRows] = await connection.execute(
-        'SELECT id,space_slug,slug,category_id,icon,page_type,redirect_url,sort_order,titles,content,updated_by,updated_at FROM pages WHERE space_slug=? AND slug=? LIMIT 1 FOR UPDATE',
+        'SELECT id,space_slug,slug,category_id,icon,page_type,redirect_url,sort_order,titles,content,publication_status,is_wip,tags,updated_by,updated_at FROM pages WHERE space_slug=? AND slug=? LIMIT 1 FOR UPDATE',
         [space, slug],
       );
       if (currentRows[0])
@@ -4941,7 +5165,7 @@ app.put(
       const titles = json(revision.titles);
       const content = safePageContent(revision.content);
       await connection.execute(
-        'INSERT INTO pages (space_slug,category_id,slug,icon,page_type,redirect_url,sort_order,titles,content,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE category_id=VALUES(category_id),icon=VALUES(icon),page_type=VALUES(page_type),redirect_url=VALUES(redirect_url),sort_order=VALUES(sort_order),titles=VALUES(titles),content=VALUES(content),updated_by=VALUES(updated_by),updated_at=UTC_TIMESTAMP()',
+        'INSERT INTO pages (space_slug,category_id,slug,icon,page_type,redirect_url,sort_order,titles,content,updated_by,publication_status,is_wip,tags) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE publication_status=VALUES(publication_status),is_wip=VALUES(is_wip),tags=VALUES(tags), category_id=VALUES(category_id),icon=VALUES(icon),page_type=VALUES(page_type),redirect_url=VALUES(redirect_url),sort_order=VALUES(sort_order),titles=VALUES(titles),content=VALUES(content),updated_by=VALUES(updated_by),updated_at=UTC_TIMESTAMP()',
         [
           space,
           categoryId,
@@ -4953,6 +5177,7 @@ app.put(
           JSON.stringify(titles),
           JSON.stringify(content),
           req.session.user.id,
+          revision.publication_status || 'published', Number(revision.is_wip) || 0, typeof revision.tags === 'string' ? revision.tags : JSON.stringify(revision.tags || []),
         ],
       );
       await connection.commit();
@@ -5469,7 +5694,7 @@ async function publicPageMetadata(req) {
   if (!slug) slug = space.home_page_slug || '';
   if (!slug) return { notFound: true };
   const [page] = await query(
-    "SELECT page_type,titles,content FROM pages WHERE space_slug=? AND slug=? LIMIT 1",
+    "SELECT page_type,titles,content,is_wip FROM pages WHERE space_slug=? AND slug=? AND publication_status='published' LIMIT 1",
     [space.slug, slug],
   );
   if (!page || page.page_type === 'redirect') return { notFound: true };
@@ -5477,7 +5702,7 @@ async function publicPageMetadata(req) {
     pageTitle = String(titles.en || titles['en-US'] || Object.values(titles).find((value) => typeof value === 'string' && value.trim()) || '').trim();
   if (!pageTitle) return { notFound: true };
   let content = {};
-  try { content = safePageContent(page.content); } catch {}
+  try { content = Number(page.is_wip) ? {} : safePageContent(page.content); } catch {}
   const html = String(content.en || content['en-US'] || Object.values(content).find((value) => typeof value === 'string') || '');
   const description = html
     .replace(/<[^>]*>/g, ' ')
@@ -5592,7 +5817,7 @@ app.get('/sitemap.xml', async (req, res, next) => {
     if (site.seo?.indexable === false) return res.status(404).type('text/plain').send('Sitemap indexing is disabled.');
     const [spaces, pages] = await Promise.all([
       query('SELECT slug,home_page_slug FROM spaces ORDER BY sort_order,slug'),
-      query("SELECT space_slug,slug,updated_at FROM pages WHERE page_type='content' ORDER BY space_slug,slug"),
+      query("SELECT space_slug,slug,updated_at FROM pages WHERE page_type='content' AND publication_status='published' AND is_wip=0 ORDER BY space_slug,slug"),
     ]);
     const locations = new Map();
     const addLocation = (path, updatedAt = null) => {
@@ -5652,6 +5877,9 @@ app.get(/^\/admin(?:\/.*)?$/, async (req, res, next) => {
     next(error);
   }
 });
+app.get(/^\/errors\/[45]\d{2}\.html$/, (req, res) =>
+  require('./scripts/error-pages').sendErrorPage(res, Number(req.path.slice(8, 11))),
+);
 app.get(/^\/(?:[^/]+(?:\/[^/]+)*)?\/?$/, sendAppIndex);
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
@@ -5679,6 +5907,8 @@ app.use((err, req, res, next) => {
       : status >= 500
         ? 'INTERNAL_SERVER_ERROR'
         : undefined;
+  if (!req.path.startsWith('/api/') && req.accepts('html'))
+    return require('./scripts/error-pages').sendErrorPage(res, status);
   res
     .status(status)
     .json({
@@ -5723,7 +5953,7 @@ initialize()
         repairMissingTables().catch((error) =>
           console.error('Could not check the MySQL schema:', error.code || error.name || 'Error'),
         ),
-      2_000,
+      60_000,
     );
     schemaTimer.unref();
     expireTemporaryPasswords().catch(() => {});
@@ -5734,6 +5964,7 @@ initialize()
       process.env.NODE_ENV === 'production' && ['127.0.0.1', 'localhost'].includes(process.env.HOST)
         ? '0.0.0.0'
         : process.env.HOST || '127.0.0.1';
+    await preparePublicAssets();
     httpServer = app.listen(port, host, () => console.log(`Teralth Wiki escucha en ${host}:${port}`));
   })
   .catch((err) => {

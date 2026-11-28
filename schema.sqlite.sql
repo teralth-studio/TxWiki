@@ -21,6 +21,7 @@ CREATE INDEX IF NOT EXISTS idx_users_temporary_expiration ON users(must_change_p
 CREATE TABLE IF NOT EXISTS spaces (
   slug TEXT NOT NULL PRIMARY KEY COLLATE BINARY,
   name TEXT NOT NULL,
+  titles TEXT,
   icon TEXT NOT NULL DEFAULT 'fa-book-open',
   logo TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
@@ -49,6 +50,9 @@ CREATE TABLE IF NOT EXISTS pages (
   icon TEXT NOT NULL DEFAULT 'fa-file-lines',
   page_type TEXT NOT NULL DEFAULT 'content' CHECK(page_type IN ('content','redirect')),
   redirect_url TEXT,
+  publication_status TEXT NOT NULL DEFAULT 'published',
+  is_wip INTEGER NOT NULL DEFAULT 0,
+  tags TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   titles TEXT NOT NULL DEFAULT '{}',
   content TEXT NOT NULL DEFAULT '{}',
@@ -69,6 +73,9 @@ CREATE TABLE IF NOT EXISTS page_revisions (
   icon TEXT NOT NULL,
   page_type TEXT NOT NULL CHECK(page_type IN ('content','redirect')),
   redirect_url TEXT,
+  publication_status TEXT NOT NULL DEFAULT 'published',
+  is_wip INTEGER NOT NULL DEFAULT 0,
+  tags TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   titles TEXT NOT NULL,
   content TEXT NOT NULL,
@@ -153,6 +160,25 @@ CREATE INDEX IF NOT EXISTS idx_background_job_history_category_date ON backgroun
 CREATE INDEX IF NOT EXISTS idx_background_jobs_claim ON background_jobs(status,available_at,id);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_expiry ON background_jobs(status,locked_until,id);
 
+CREATE TABLE IF NOT EXISTS dashboard_visitors (
+  visit_day TEXT NOT NULL,
+  visitor_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (visit_day, visitor_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_dashboard_visitors_day ON dashboard_visitors(visit_day);
+
+CREATE TABLE IF NOT EXISTS dashboard_stats (
+  snapshot_day TEXT NOT NULL PRIMARY KEY,
+  visitor_count INTEGER NOT NULL DEFAULT 0,
+  users_count INTEGER NOT NULL DEFAULT 0,
+  pages_count INTEGER NOT NULL DEFAULT 0,
+  happy_count INTEGER NOT NULL DEFAULT 0,
+  neutral_count INTEGER NOT NULL DEFAULT 0,
+  sad_count INTEGER NOT NULL DEFAULT 0,
+  captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS rate_limit_buckets (
   bucket_key TEXT NOT NULL PRIMARY KEY,
   total_hits INTEGER NOT NULL,
@@ -183,3 +209,11 @@ CREATE TABLE IF NOT EXISTS wiki_update_migrations (
   sha256 TEXT NOT NULL,
   applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS user_profiles (user_id BIGINT NOT NULL PRIMARY KEY,full_name VARCHAR(120) NOT NULL DEFAULT '',avatar VARCHAR(255) NOT NULL DEFAULT '',preferred_language VARCHAR(20) NOT NULL DEFAULT 'en',login_notifications INT NOT NULL DEFAULT 1);
+
+CREATE TABLE IF NOT EXISTS oauth_connections (provider VARCHAR(20) NOT NULL PRIMARY KEY,client_id VARCHAR(255) NOT NULL,secret_ciphertext TEXT NOT NULL,redirect_uri VARCHAR(1000) NOT NULL,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
+
+CREATE TABLE IF NOT EXISTS oauth_identities (provider VARCHAR(20) NOT NULL,subject VARCHAR(255) NOT NULL,user_id BIGINT NOT NULL,display_name VARCHAR(255) NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(provider,subject),UNIQUE(user_id,provider));
+
+CREATE TABLE IF NOT EXISTS profile_email_changes (user_id BIGINT NOT NULL PRIMARY KEY,email VARCHAR(254) NOT NULL,token_hash CHAR(64) NOT NULL,expires_at BIGINT NOT NULL);

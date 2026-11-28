@@ -43,7 +43,10 @@ function normalizeHeaderLink(input, languages) {
   }
   if (!Object.keys(normalizedTitles).length)
     throw Object.assign(new Error('Añade un título en al menos un idioma activo.'), { status: 400 });
-  return { url: normalizedUrl, external, titles: normalizedTitles };
+  const icon = input.icon;
+  if (icon && icon !== 'none' && (typeof icon !== 'string' || icon.length > 80 || !/^(?:(?:fa-solid|fa-regular|fa-brands)\s+)?fa-[a-z0-9-]+$/.test(icon)))
+    throw Object.assign(new Error('Invalid header link icon.'), { status: 400 });
+  return { url: normalizedUrl, external, titles: normalizedTitles, ...(icon && icon !== 'none' ? { icon } : {}) };
 }
 
 function normalizeHeaderLinks(value, languages) {

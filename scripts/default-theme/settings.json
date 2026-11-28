@@ -7,12 +7,12 @@
     {
       "name": "Primary Color",
       "type": "color",
-      "default": "#91a8ff"
+      "default": "#a3a3a3"
     },
     {
       "name": "Secondary Color",
       "type": "color",
-      "default": "#7188e8"
+      "default": "#e5e5e5"
     }
   ]
 }

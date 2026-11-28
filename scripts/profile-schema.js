@@ -1,0 +1,10 @@
+const statements = [
+  `CREATE TABLE IF NOT EXISTS user_profiles (user_id BIGINT NOT NULL PRIMARY KEY,full_name VARCHAR(120) NOT NULL DEFAULT '',avatar VARCHAR(255) NOT NULL DEFAULT '',preferred_language VARCHAR(20) NOT NULL DEFAULT 'en',login_notifications INT NOT NULL DEFAULT 1)`,
+  `CREATE TABLE IF NOT EXISTS oauth_connections (provider VARCHAR(20) NOT NULL PRIMARY KEY,client_id VARCHAR(255) NOT NULL,secret_ciphertext TEXT NOT NULL,redirect_uri VARCHAR(1000) NOT NULL,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+  `CREATE TABLE IF NOT EXISTS oauth_identities (provider VARCHAR(20) NOT NULL,subject VARCHAR(255) NOT NULL,user_id BIGINT NOT NULL,display_name VARCHAR(255) NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(provider,subject),UNIQUE(user_id,provider))`,
+  `CREATE TABLE IF NOT EXISTS profile_email_changes (user_id BIGINT NOT NULL PRIMARY KEY,email VARCHAR(254) NOT NULL,token_hash CHAR(64) NOT NULL,expires_at BIGINT NOT NULL)`,
+];
+async function ensureProfileSchema(pool) {
+  for (const statement of statements) await pool.query(statement);
+}
+module.exports = { statements, ensureProfileSchema };

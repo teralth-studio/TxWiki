@@ -5,13 +5,13 @@ window.TeralthAdminUpdates = {
     const transferId = await storeUpdateTransfer({ automatic, file, t });
     location.assign(`/admin/updates/progress?transfer=${encodeURIComponent(transferId)}`);
   },
-  async render(root, { api, t, esc, showError, csrf, navigate, canManageBackups, startSeparateUpdate, autoStart }) {
+  async render(root, { api, t, esc, showError, csrf, navigate, canManageBackups, startSeparateUpdate, autoStart, timeZone }) {
     try {
       const result = await api('/api/admin/updates');
       const label = (spanish, english) => esc(t(spanish, english));
       const dateText = (value) => {
         const date = new Date(value);
-        return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date);
+        return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone }).format(date);
       };
       root.innerHTML =
         '<section class="admin-section update-overview"><div class="section-heading"><div><h2>' +
@@ -67,12 +67,7 @@ window.TeralthAdminUpdates = {
         label('Formato .zip · máximo 64 MB', '.zip format · 64 MB maximum') +
         '</small><input type="file" id="siteUpdateFile" name="package" accept=".zip,application/zip" required ' +
         (result.configured ? '' : 'disabled') +
-        '></span></label><p class="update-notice" role="note"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> ' +
-        label(
-          'Se valida que la clave SSH del ZIP coincida con la oficial, además de comprobar firma, hashes, rutas y sintaxis. El código no se ejecuta durante estas comprobaciones.',
-          'The ZIP SSH key must match the official key; its signature, hashes, paths, and syntax are also checked. Package code is not executed during these checks.',
-        ) +
-        '</p><button class="primary-button" id="applySiteUpdate" type="submit" ' +
+        '></span></label><button class="primary-button" id="applySiteUpdate" type="submit" ' +
         (result.configured ? '' : 'disabled') +
         '><i class="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i> ' +
         label('Actualizar manualmente', 'Update manually') +
@@ -97,11 +92,15 @@ window.TeralthAdminUpdates = {
         '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="update-overall-track" cx="60" cy="60" r="52"></circle><circle class="update-overall-arc" id="updateValidationArc" cx="60" cy="60" r="52" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"></circle></svg><span id="updateValidationRingPercent">0%</span></div><p class="update-current-phase"><span id="updateCurrentPhase"></span><strong id="updateCurrentPhasePercent">0%</strong></p></div></div><div class="form-message auth-error update-validation-error" hidden role="alert"></div></section><section class="admin-section update-history-section"><div class="section-heading"><div><h2>' +
         label('Actualizaciones instaladas', 'Installed updates') +
         '</h2><p>' +
-        label('Las diez instalaciones más recientes en este sitio.', 'The ten most recent installations on this site.') +
+        label('Historial de instalaciones, de más reciente a más antigua.', 'Installations, newest first.') +
         '</p></div></div>' +
-        (result.updates.length
+        '<div id="updateHistoryList"></div><nav class="user-pagination update-history-pagination" aria-label="' + label('Actualizaciones instaladas','Installed updates') + '"></nav></section>';
+      const history = root.querySelector('#updateHistoryList');
+      const pager = root.querySelector('.update-history-pagination');
+      const renderHistory = data => {
+        history.innerHTML = (data.updates.length
           ? '<div class="update-history">' +
-            result.updates
+            data.updates
               .map(
                 (update) =>
                   '<div class="update-history-row"><span><strong>' +
@@ -116,8 +115,26 @@ window.TeralthAdminUpdates = {
             '</div>'
           : '<p class="empty-state">' +
             label('Todavía no se han instalado actualizaciones.', 'No updates have been installed yet.') +
-            '</p>') +
-        '</section>';
+            '</p>');
+        const page = data.page || 1, last = data.totalPages || 1;
+        pager.replaceChildren();
+        if (last === 1) return;
+        const buttons = [[t('Inicio', 'First'), 1], [t('Anterior','Previous'), page - 1], [page + ' / ' + last, page], [t('Siguiente','Next'),page + 1], [t('Fin','Last'),last]];
+        for (const [caption, target] of buttons) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'secondary-button';
+          button.textContent = caption;
+          button.disabled = target === page || target < 1 || target > last;
+          button.onclick = async () => {
+            for (const control of pager.children) control.disabled = true;
+            try { renderHistory(await api('/api/admin/updates?page=' + target)); }
+            catch (error) { renderHistory(data); showError(root, error); }
+          };
+          pager.append(button);
+        }
+      };
+      renderHistory(result);
 
       const refreshButton = root.querySelector('#checkSiteUpdates');
       const automaticButton = root.querySelector('#applyAutomaticUpdate');

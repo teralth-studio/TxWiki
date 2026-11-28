@@ -56,6 +56,8 @@ function describeAdminAction(method, path, body = {}) {
   };
 
   if (pathname === '/api/admin/smtp/test') return action('smtp.tested');
+  if (/^\/api\/admin\/connections\/(google|discord|github)$/.test(pathname))
+    return action(normalizedMethod === 'DELETE' ? 'connection.deleted' : 'connection.updated', segments.at(-1));
   if (pathname === '/api/admin/settings/registration') return action('registration.updated');
   if (pathname === '/api/admin/backups/import') return action('backup.imported');
   if (pathname === '/api/admin/backups/create') return action('backup.created');

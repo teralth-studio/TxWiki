@@ -93,7 +93,11 @@ function showLoading() {
   loadingDepth++;
   document.title = 'Loading...';
   const loader = $('#globalLoader');
-  if (loader) loader.hidden = false;
+  if (loader) {
+    if (loader.dataset)
+      loader.dataset.surface = (typeof location !== 'undefined' && location.pathname.startsWith('/admin')) || document.body?.classList.contains('admin-mode') ? 'admin' : 'wiki';
+    loader.hidden = false;
+  }
 }
 function hideLoading() {
   loadingDepth = Math.max(0, loadingDepth - 1);
@@ -109,24 +113,147 @@ const esc = (value) =>
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
   );
 const iconClass = (value) => (/^[a-z0-9-]+$/.test(value || '') ? value : 'fa-file-lines');
-function setPageIconUploadStatus(element, url) {
-  element.replaceChildren();
-  if (!/^\/media\/[A-Za-z0-9_-]{16}\.(?:png|jpg|gif|webp)$/.test(String(url || ''))) {
-    element.textContent = t('No hay imagen subida', 'No image uploaded');
-    return;
+const brandImagePath = /^\/media\/[A-Za-z0-9_-]{16}\.(?:png|jpg|gif|webp)$/;
+const brandIconClass = /^(?:fa-(?:solid|regular|brands)\s+)?fa-[a-z0-9-]+$/;
+const documentationIcons = [
+  'book', 'book-open', 'file-lines', 'folder', 'folder-open', 'bookmark', 'list', 'house',
+  'compass', 'map', 'magnifying-glass', 'lightbulb', 'circle-info', 'circle-question',
+  'code', 'terminal', 'gear', 'wrench', 'link', 'shield-halved',
+];
+
+function brandFields(prefix, value, fallback = 'fa-solid fa-file-lines', { iconOnly = false } = {}) {
+  const mode = !iconOnly && brandImagePath.test(value) ? 'image' : value === 'none' ? 'none' : 'icon';
+  const icon = brandIconClass.test(value) ? value : fallback;
+  return `<div class="brand-fields" id="${prefix}Fields">
+    <label><span class="admin-label">${t('Tipo de marca', 'Brand type')}</span>
+      <select class="settings-input" id="${prefix}Mode" required>
+        <option value="icon">Font Awesome icon</option>
+        ${iconOnly ? '' : `<option value="image" ${mode === 'image' ? 'selected' : ''}>${t('Subir imagen', 'Image upload')}</option>`}
+        <option value="none" ${mode === 'none' ? 'selected' : ''}>${t('Ninguna', 'None')}</option>
+      </select></label>
+    <div class="brand-selector"><label class="admin-label" data-brand-label for="${prefix}Icon"></label>
+      <div class="brand-selector-row"><div class="brand-input-wrap">
+        <input class="settings-input" id="${prefix}Icon" data-brand-icon maxlength="80" value="${esc(icon)}">
+        <button type="button" data-brand-pick aria-label="${t('Elegir ícono', 'Choose icon')}"><i class="fa-solid fa-magnifying-glass"></i></button>
+        <input type="file" class="settings-input" id="${prefix}Image" data-brand-file accept="image/png,image/jpeg,image/gif,image/webp" data-path="${mode === 'image' ? esc(value) : ''}" hidden>
+        <input class="settings-input" data-brand-disabled aria-label="${t('Desactivado', 'Disabled')}" disabled hidden>
+      </div><span class="brand-preview" data-brand-preview aria-hidden="true"></span></div>
+      <small role="status" data-brand-status></small><div data-brand-options hidden></div>
+    </div></div>`;
+}
+
+async function uploadBrandImage(file) {
+  const body = new FormData();
+  body.append('image', file);
+  const response = await request('/api/admin/uploads', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'X-Wiki-Space': state.space, 'X-CSRF-Token': state.csrf }, body,
+  });
+  return (await imageUploadResponse(response)).url;
+}
+
+async function brandFormDialog(settings) {
+  let savedBody = null, selection = null;
+  for (;;) {
+    let picker = null;
+    const result = await Swal.fire({
+      ...settings,
+      html: savedBody || settings.html,
+      didOpen: popup => {
+        if (!savedBody) settings.didOpen?.(popup);
+        const body = Swal.getHtmlContainer();
+        body.dataset.brandDialog = 'true';
+        body.addEventListener('brand-icon-picker', event => {
+          event.stopPropagation();
+          picker = event.detail;
+          if (!savedBody) {
+            savedBody = document.createElement('div');
+            savedBody.append(...body.childNodes);
+          } else savedBody.remove();
+          Swal.close();
+        });
+        if (selection) {
+          selection.choose(selection.name);
+          selection = null;
+        }
+      },
+    });
+    if (!picker) return result;
+    let name = '';
+    await Swal.fire({
+      title: t('Elegir ícono', 'Choose icon'), html: picker.grid,
+      showConfirmButton: false, showCancelButton: true,
+      cancelButtonText: t('Cancelar', 'Cancel'),
+      didOpen: () => {
+        Swal.getHtmlContainer().onclick = event => {
+          const button = event.target.closest('[data-icon-name]');
+          if (button) { name = button.dataset.iconName; Swal.close(); }
+        };
+      },
+    });
+    if (name) selection = { name, choose: picker.choose };
   }
-  const image = document.createElement('img');
-  image.className = 'category-image-preview';
-  image.src = url;
-  image.alt = '';
-  const link = document.createElement('a');
-  link.href = url;
-  link.textContent = url;
-  link.target = '_blank';
-  link.rel = 'noopener noreferrer';
-  element.append(image, link);
+}
+
+function bindBrandFields(root, prefix, { onChange = () => {}, upload = uploadBrandImage } = {}) {
+  const fields = $('#' + prefix + 'Fields', root);
+  const mode = $('select', fields), icon = $('[data-brand-icon]', fields), file = $('[data-brand-file]', fields);
+  const pick = $('[data-brand-pick]', fields), preview = $('[data-brand-preview]', fields);
+  const status = $('[data-brand-status]', fields), options = $('[data-brand-options]', fields);
+  let uploading = false;
+  const value = () => mode.value === 'none' ? 'none' : mode.value === 'image' ? file.dataset.path : icon.value.trim();
+  const valid = () => mode.value === 'none' || (mode.value === 'image' ? !uploading && brandImagePath.test(value()) : brandIconClass.test(value()));
+  const paint = () => {
+    const image = mode.value === 'image', none = mode.value === 'none';
+    const label = $('[data-brand-label]', fields);
+    label.textContent = t('Selector de marca', 'Brand selector') + ': ' + (none ? t('Desactivado', 'Disabled') : mode.selectedOptions[0].text);
+    label.htmlFor = image ? file.id : icon.id;
+    icon.hidden = image || none; icon.disabled = none; icon.required = !none && !image;
+    file.hidden = !image; pick.hidden = image || none;
+    $('[data-brand-disabled]', fields).hidden = !none;
+    options.hidden = true;
+    preview.innerHTML = !none && valid() ? pageIconMarkup(value()) : '';
+    preview.hidden = !preview.firstChild;
+  };
+  mode.onchange = () => { paint(); onChange(); };
+  icon.oninput = () => { paint(); onChange(); };
+  const choose = (name) => { icon.value = 'fa-solid fa-' + name; paint(); onChange(); pick.focus(); };
+  pick.onclick = async () => {
+    const buttons = documentationIcons.map(name => '<button type="button" data-icon-name="' + name + '"><i class="fa-solid fa-' + name + '"></i><span>' + name + '</span></button>').join('');
+    const grid = '<div class="brand-icon-grid">' + buttons + '</div>';
+    if (fields.closest('[data-brand-dialog]')) {
+      fields.dispatchEvent(new CustomEvent('brand-icon-picker', { bubbles: true, detail: { grid, choose } }));
+    } else if (fields.closest('.swal2-popup')) {
+      if (!options.hidden) { options.hidden = true; return; }
+      options.innerHTML = grid; options.hidden = false;
+      options.onclick = event => { const button = event.target.closest('[data-icon-name]'); if (button) choose(button.dataset.iconName); };
+      $('button', options).focus();
+    } else {
+      await Swal.fire({
+        title: t('Elegir ícono', 'Choose icon'), html: grid, showConfirmButton: false,
+        showCancelButton: true, cancelButtonText: t('Cancelar', 'Cancel'),
+        didOpen: () => { Swal.getHtmlContainer().onclick = event => {
+          const button = event.target.closest('[data-icon-name]');
+          if (button) { choose(button.dataset.iconName); Swal.close(); }
+        }; },
+      });
+    }
+  };
+  file.onchange = async () => {
+    const selected = file.files[0]; if (!selected) return;
+    uploading = true; file.disabled = true; status.textContent = t('Subiendo imagen…', 'Uploading image…');
+    try {
+      const path = await upload(selected);
+      if (!brandImagePath.test(path)) throw new Error(t('Imagen no válida.', 'Invalid image.'));
+      file.dataset.path = path; status.textContent = ''; onChange();
+    } catch (error) { status.textContent = userErrorText(error); }
+    finally { uploading = false; file.disabled = false; file.value = ''; paint(); }
+  };
+  paint();
+  return { value, valid };
 }
 const pageIconMarkup = (value, cls = '') =>
+  value === 'none' ? '' :
   /^\/media\/[A-Za-z0-9_-]{16}\.(png|jpg|gif|webp)$/.test(value || '')
     ? '<img class="page-icon-image ' + cls + '" src="' + esc(value) + '" alt="">'
     : '<i class="' +
@@ -143,7 +270,7 @@ const pageIconMarkup = (value, cls = '') =>
 const spaceMarkMarkup = (space) =>
   /^\/media\/[A-Za-z0-9_-]{16}\.(png|jpg|gif|webp)$/.test(space?.logo || '')
     ? '<img class="space-logo-image" src="' + esc(space.logo) + '" alt="">'
-    : pageIconMarkup(space?.icon || 'fa-book-open');
+    : space?.icon === 'none' ? '' : pageIconMarkup(space?.icon || 'fa-book-open');
 const t = (es, en) => {
   const english = en ?? es,
     locale = String(state.lang || 'en').toLowerCase(),
@@ -181,6 +308,7 @@ const can = (permission) =>
   );
 const canAny = (permissions) => permissions.some(can);
 const rolePermissionKeys = [
+  'connections.manage',
   'captcha.configure',
   'admin.view',
   'pages.create_edit',
@@ -386,8 +514,8 @@ const pathParts = () => {
     return ['__invalid_path__', 'not-found'];
   }
 };
-const adminTabKeys = ['pages', 'categories', 'header-links', 'settings', 'spaces', 'languages', 'users', 'roles', 'proxy', 'smtp', 'backups', 'captcha', 'logs', 'jobs', 'themes', 'updates'];
-function adminUrl(tab = 'pages', space = state.space) {
+const adminTabKeys = ['dashboard', 'pages', 'categories', 'header-links', 'settings', 'support-card', 'wip', 'spaces', 'languages', 'users', 'roles', 'proxy', 'smtp', 'backups', 'captcha', 'logs', 'jobs', 'themes', 'updates', 'connections'];
+function adminUrl(tab = 'dashboard', space = state.space) {
   const section = adminTabKeys.includes(tab) ? tab : 'pages';
   if ((space || 'main') === 'main')
     return `/admin/${section}${['pages', 'categories'].includes(section) ? '?space=main' : ''}`;
@@ -397,6 +525,7 @@ function route() {
   const p = pathParts(),
     spaces = state.config?.spaces || [];
   if (!p.length) return { page: 'home', space: 'main', slug: null };
+  if (p[0] === 'profile' && p.length <= 2) return { page: 'profile', space: 'main', section: p[1] || 'summary' };
   if (p[0] === 'admin') {
     const requested = new URLSearchParams(location.search).get('space') || 'main',
       match = spaces.find((item) => item.slug.toLowerCase() === requested.toLowerCase());
@@ -411,7 +540,7 @@ function route() {
       page: 'admin',
       space: match?.slug || 'main',
       slug: null,
-      tab: adminTabKeys.includes(p[1]) && p.length === 2 ? p[1] : 'pages',
+      tab: p.length === 1 ? 'dashboard' : adminTabKeys.includes(p[1]) && p.length === 2 ? p[1] : 'pages',
     };
   }
   if (['login', 'register', 'reset', 'admin', 'verify', 'change-password', 'two-factor-setup', 'two-factor'].includes(p[0]) && p.length === 1) {
@@ -664,6 +793,9 @@ function showCouldNotStart(error, source = 'handled', context = {}) {
   overlay.setAttribute('aria-modal', 'true');
   const card = document.createElement('div');
   card.className = 'fatal-box-card';
+  const status = document.createElement('div');
+  status.className = 'error-status-code';
+  status.textContent = String(Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : 500);
   const title = document.createElement('h1');
   title.textContent = `[${code}] ${t('Ocurrió un error.', 'An error ocurred')}`;
   const text = document.createElement('p');
@@ -671,9 +803,19 @@ function showCouldNotStart(error, source = 'handled', context = {}) {
     'Si administras el servidor, revisa la consola.',
     'If you are the server administrator, please check the console',
   );
-  card.append(title, text);
+  const back = document.createElement('a');
+  back.href = '/';
+  back.className = 'error-back-link';
+  back.textContent = t('Volver', 'Go back');
+  card.append(status, title, text, back);
   overlay.append(card);
   document.body.append(overlay);
+  if (typeof window !== 'undefined' && window.TxWikiErrors) {
+    window.TxWikiErrors.mount(overlay, {
+      message: `${status.textContent}, ${t('ocurrió un error', 'an error occurred')}.`,
+      backLabel: t('Volver', 'Go back'), replayLabel: t('Repetir animación', 'Replay animation'),
+    });
+  }
 }
 function isUserError(error) {
   return Boolean(error) && Number.isInteger(error.status) && error.status >= 400 && error.status < 500;
@@ -821,9 +963,9 @@ function setAuthLink() {
     menu = $('#userMenu');
   if (state.user) {
     link.innerHTML =
-      '<i class="fa-solid fa-user"></i><span>' +
-      esc(state.user.username) +
-      '</span><i class="fa-solid fa-ellipsis menu-caret"></i>';
+      userAvatarMarkup(state.user.avatar, state.user.username);
+    link.setAttribute('aria-label', state.user.username);
+    link.querySelector('img')?.addEventListener('error', event => { event.target.replaceWith(Object.assign(document.createElement('span'), { className: 'account-initials', textContent: state.user.username.slice(0, 2).toUpperCase() })); }, { once: true });
     link.classList.add('signed-in');
     link.setAttribute('aria-expanded', 'false');
     link.onclick = (e) => {
@@ -837,11 +979,9 @@ function setAuthLink() {
           t('Administración', 'Administration') +
           '</button>'
         : '') +
-      '<button data-user-action="password"><i class="fa-solid fa-key"></i> ' +
-      t('Cambiar contraseña', 'Change password') +
-      '</button><button data-user-action="two-factor"><i class="fa-solid fa-shield-halved"></i> ' +
-      (state.user.twoFactorEnabled ? t('Desactivar 2FA', 'Disable 2FA') : t('Activar 2FA', 'Enable 2FA')) +
-      '</button><button class="user-menu-logout" data-user-action="logout"><i class="fa-solid fa-arrow-right-from-bracket"></i> ' +
+      '<button data-user-action="profile"><i class="fa-solid fa-user-gear"></i> ' +
+      t('Ajustes de perfil', 'Profile settings') +
+      '</button><hr class="user-menu-divider"><button class="user-menu-logout" data-user-action="logout"><i class="fa-solid fa-arrow-right-from-bracket"></i> ' +
       t('Cerrar sesión', 'Sign out') +
       '</button>';
     menu.classList.add('has-user');
@@ -861,13 +1001,13 @@ function setAuthLink() {
     (button) =>
       (button.onclick = () => {
         if (button.dataset.userAction === 'admin') {
-          if (state.dirty) return confirmUnsaved().then((confirmed) => confirmed && (location.href = adminUrl('pages')));
-          location.href = adminUrl('pages');
+          if (state.dirty) return confirmUnsaved().then((confirmed) => confirmed && (location.href = adminUrl()));
+          location.href = adminUrl();
           return;
         }
         if (button.dataset.userAction === 'logout') return logout();
-        if (button.dataset.userAction === 'two-factor') return state.user.twoFactorEnabled ? disableTwoFactor() : (location.href = '/two-factor-setup');
-        return changePassword();
+        if (state.dirty) return confirmUnsaved().then(confirmed => { if (confirmed) location.href = '/profile'; });
+        location.href = '/profile';
       }),
   );
 }
@@ -1267,6 +1407,30 @@ function authForm(mode, resetEmail = '') {
   panel.innerHTML = `<div class="auth-brand"><span class="brand-mark"><i class="fa-solid fa-book-open"></i></span><strong>${esc(state.config.site.name)}</strong></div><h1>${heading}</h1><p>${subtitle}</p><form id="authForm">${fields}${state.config?.captcha?.enabled ? '<div class="captcha-wrap"><div class="captcha-slot"></div><div class="captcha-status" role="alert" hidden></div></div>' : ''}<div class="form-message auth-error" hidden></div><div class="auth-success form-success" hidden></div><button class="primary-button" type="submit">${buttonText}</button>${['forgot', 'reset', 'change'].includes(mode) ? `<button class="secondary-button auth-cancel" type="button">${t('Cancelar', 'Cancel')}</button>` : ''}</form>${links}`;
   const form = $('#authForm', panel),
     captcha = createCaptchaController(form, mode);
+  if (mode === 'login') {
+    const providers = document.createElement('div');
+    providers.className = 'oauth-signin-buttons';
+    panel.append(providers);
+    const notice = new URLSearchParams(location.search).get('notice');
+    if (notice?.startsWith('oauth-')) {
+      $('.form-message', form).textContent = notice === 'oauth-unlinked'
+        ? t('Inicia sesión con tu contraseña y vincula primero la conexión desde tu perfil.', 'Sign in with your password and link this provider in your profile first.')
+        : t('No se pudo iniciar sesión con la conexión. Vuelve a intentarlo.', 'Could not sign in with this connection. Try again.');
+      $('.form-message', form).hidden = false;
+    }
+    api('/api/auth/connections').then(result => {
+      if (!providers.isConnected) return;
+      providers.innerHTML = result.connections.map(item => `<button class="secondary-button" type="button" data-oauth-login="${esc(item.provider)}">${t('Continuar con', 'Continue with')} ${esc(item.name)}</button>`).join('');
+      $$('[data-oauth-login]', providers).forEach(button => { button.onclick = async () => {
+        button.disabled = true;
+        try {
+          const captchaToken = state.config?.captcha?.enabled ? await captcha.token() : '';
+          const result = await api(`/api/auth/oauth/${encodeURIComponent(button.dataset.oauthLogin)}/start`, { method: 'POST', body: JSON.stringify({ captchaToken }) });
+          location.assign(result.url);
+        } catch (error) { captcha.reset(); showError(form, error); button.disabled = false; }
+      }; });
+    }).catch(error => showError(form, error));
+  }
   form.noValidate = true;
   const cancel = form.querySelector('.auth-cancel');
   if (cancel) cancel.onclick = () => { location.href = mode === 'change' ? safeLocalReturn(state.returnTo || '/') : '/login'; };
@@ -1454,81 +1618,44 @@ function safeLocalReturn(value) {
 }
 function renderSpaces() {
   const spaces = state.config.spaces || [];
-  if (!spaces.some((s) => s.slug === state.space)) state.space = spaces[0]?.slug || 'main';
-  const current = spaces.find((s) => s.slug === state.space) || spaces[0];
+  if (!spaces.some(s => s.slug === state.space)) state.space = spaces[0]?.slug || 'main';
+  const current = spaces.find(s => s.slug === state.space) || spaces[0];
   if (!current) return;
-  $('#spaceCurrentName').textContent = current.name;
-  $('.space-symbol').innerHTML = spaceMarkMarkup(current);
+  $('#spaceCurrentName').textContent = navigationTitle(current);
+  const mark = $('.space-symbol');
+  mark.innerHTML = spaceMarkMarkup(current);
+  mark.hidden = !mark.innerHTML;
   const menu = $('#spaceDropdownMenu');
-  menu.setAttribute('aria-label', t('Espacios de documentación', 'Documentation spaces'));
-  menu.innerHTML = spaces
-    .map(
-      (space) =>
-        `<button type="button" role="option" aria-selected="${space.slug === state.space}" class="space-option ${space.slug === state.space ? 'selected' : ''}" data-space="${esc(space.slug)}">${spaceMarkMarkup(space)}<span class="space-option-copy"><span>${esc(space.name)}</span><small>${space.slug === 'main' ? '/' : '/' + esc(space.slug)}</small></span>${space.slug === state.space ? '<i class="fa-solid fa-check space-check"></i>' : ''}</button>`,
-    )
-    .join('');
-  $$('.space-option', menu).forEach(
-    (button) =>
-      (button.onclick = async () => {
-        if (!(await confirmUnsaved())) return;
-        state.space = button.dataset.space;
-        $('#spaceDropdownButton').setAttribute('aria-expanded', 'false');
-        $('#spacePicker').classList.remove('open');
-        $('#spaceDropdownMenu').classList.remove('open');
-        history.pushState({}, '', state.space === 'main' ? '/' : '/' + encodeURIComponent(state.space));
-        await loadWiki();
-      }),
-  );
+  menu.setAttribute('aria-label', t('Espacios', 'Spaces'));
+  menu.innerHTML = spaces.map(space =>
+    `<button type="button" role="option" aria-selected="${space.slug === state.space}" class="space-option ${space.slug === state.space ? 'selected' : ''}" data-space="${esc(space.slug)}">${spaceMarkMarkup(space)}<span class="space-option-copy">${esc(navigationTitle(space))}</span></button>`
+  ).join('');
+  $$('.space-option', menu).forEach(button => {
+    button.onclick = async () => {
+      if (!(await confirmUnsaved())) return;
+      state.space = button.dataset.space;
+      $('#spaceDropdownButton').setAttribute('aria-expanded', 'false');
+      $('#spacePicker').classList.remove('open');
+      menu.classList.remove('open');
+      history.pushState({}, '', state.space === 'main' ? '/' : '/' + encodeURIComponent(state.space));
+      await loadWiki();
+    };
+  });
 }
 function renderLanguageMenu() {
   const box = $('#languageMenu');
   const trigger = $('#languageButton');
-  const languageName = (code) => {
-    const item = (state.config.languageCatalog || []).find((entry) => entry.code === code);
-    if (item?.name) return item.name;
-    try {
-      return new Intl.DisplayNames([code], { type: 'language' }).of(code) || code;
-    } catch {
-      return code;
-    }
-  };
-  const languageFlag = (code) => {
-    const [language, region] = String(code || '').split('-');
-    const regionFlags = {
-      en: '🇬🇧',
-      es: '🇪🇸',
-      fr: '🇫🇷',
-      de: '🇩🇪',
-      pt: '🇧🇷',
-      it: '🇮🇹',
-      ja: '🇯🇵',
-      zh: '🇨🇳',
-      ru: '🇷🇺',
-      ar: '🇸🇦',
-      ko: '🇰🇷',
-      hi: '🇮🇳',
-      nl: '🇳🇱',
-      pl: '🇵🇱',
-      tr: '🇹🇷',
-    };
-    const country = region?.toUpperCase();
-    if (country && /^[A-Z]{2}$/.test(country)) {
-      return String.fromCodePoint(...[...country].map((letter) => letter.charCodeAt(0) + 127397));
-    }
-    return regionFlags[language.toLowerCase()] || '🌐';
-  };
   const languages = state.config.languages || ['en', 'es'];
   const selectedLanguage = languages.includes(state.lang) ? state.lang : languages[0] || 'en';
-  const currentName = languageName(selectedLanguage);
-  trigger.querySelector('.language-current-flag').innerHTML =
-    '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="7.25"></circle><path d="M2.9 10h14.2M10 2.75c2 2 3 4.42 3 7.25s-1 5.25-3 7.25c-2-2-3-4.42-3-7.25s1-5.25 3-7.25Z"></path></svg>';
+  const currentName = settingsLanguageName(selectedLanguage);
+  trigger.querySelector('.language-current-flag').replaceChildren();
   trigger.querySelector('.language-current-name').textContent = currentName;
   trigger.setAttribute('aria-label', `${t('Cambiar idioma', 'Change language')}: ${currentName}`);
   box.innerHTML = languages
     .map((code) => {
-      const label = languageName(code);
+      const label = settingsLanguageName(code);
       const selected = selectedLanguage === code;
-      return `<button class="language-option${selected ? ' active' : ''}" data-lang="${esc(code)}" role="menuitemradio" aria-checked="${selected}"><span class="language-option-flag" aria-hidden="true">${languageFlag(code)}</span><span>${esc(label)}</span>${selected ? '<i class="fa-solid fa-check" aria-hidden="true"></i>' : ''}</button>`;
+      return `<button class="language-option${selected ? ' active' : ''}" data-lang="${esc(code)}" role="menuitemradio" aria-checked="${selected}"><span>${esc(label)}</span>${selected ? '<i class="fa-solid fa-check" aria-hidden="true"></i>' : ''}</button>`;
     })
     .join('');
   $$('button', box).forEach(
@@ -1585,44 +1712,29 @@ function filterNav(value = '') {
     empty.hidden = false;
   } else if (empty) empty.remove();
 }
-function renderSearchSuggestions(value = '') {
-  const box = $('#searchSuggestions'),
-    input = $('#searchInput');
-  if (!box || !input) return;
-  const term = foldSearch(value.trim());
-  input.removeAttribute('aria-activedescendant');
-  if (term.length < 2) {
-    box.hidden = true;
-    input.setAttribute('aria-expanded', 'false');
-    searchMatches = [];
+async function renderSearchSuggestions(value = '') {
+  const box = $('#searchSuggestions'), input = $('#searchInput'), sequence = ++searchRequest;
+  if (!$('#searchDialog')?.open) return;
+  searchMatches = []; searchSelection = -1;
+  input.removeAttribute('aria-activedescendant'); input.setAttribute('aria-expanded', 'false');
+  box.innerHTML = '<div class="search-result-skeleton" aria-hidden="true"><span class="skeleton-block"></span><span class="skeleton-block"></span><span class="skeleton-block"></span></div>';
+  box.hidden = false; box.setAttribute('aria-busy', 'true');
+  try {
+    const result = await api('/api/search?q=' + encodeURIComponent(value.trim()) + '&tag=' + encodeURIComponent(searchTag) + '&lang=' + encodeURIComponent(state.lang));
+    if (sequence !== searchRequest || !$('#searchDialog').open) return;
+    $('#searchFilters').innerHTML = (result.tags || []).map(tag => '<button type="button" class="search-tag' + (tag === searchTag ? ' selected' : '') + '" aria-pressed="' + (tag === searchTag) + '" data-search-tag="' + esc(tag) + '">' + esc(tag) + '</button>').join('');
+    searchMatches = (value.trim() || searchTag ? result.results || [] : []).map(item => ({ page: { slug: item.slug }, label: item.title }));
     searchSelection = -1;
-    return;
-  }
-  searchMatches = (state.pages || [])
-    .map((page) => ({
-      page,
-      label:
-        page.titles[state.lang] ||
-        page.titles[state.lang.split('-')[0]] ||
-        Object.values(page.titles)[0] ||
-        page.slug,
-    }))
-    .filter((item) => foldSearch(item.label + ' ' + item.page.slug).includes(term))
-    .slice(0, 8);
-  searchSelection = -1;
-  box.innerHTML = searchMatches.length
-    ? searchMatches
-        .map(
-          ({ page, label }, index) =>
-            `<div id="search-option-${index}" class="search-suggestion" role="option" aria-selected="false" data-index="${index}" data-slug="${esc(page.slug)}"><i class="fa-solid fa-file-lines" aria-hidden="true"></i><span>${esc(label)}</span><small>/${esc(page.slug)}</small></div>`,
-        )
-        .join('')
-    : `<div class="search-suggestion-empty" role="option" aria-disabled="true" aria-selected="false">${t('No hay resultados.', 'No results.')}</div>`;
-  box.hidden = false;
-  input.setAttribute('aria-expanded', 'true');
+    box.innerHTML = !value.trim() && !searchTag ? '<p class="search-empty">' + t('Escribe para buscar.', 'Start typing to search.') + '</p>' : (result.results || []).map((item,index) => '<a href="' + esc(navUrl(state.space,item.slug)) + '" class="search-suggestion" id="search-option-' + index + '" role="option" aria-selected="false" data-index="' + index + '" data-slug="' + esc(item.slug) + '"><strong>' + esc(item.title) + '</strong><p>' + esc(item.excerpt || '') + '</p><small>/' + esc(item.slug) + '</small></a>').join('') || '<p class="search-empty">' + t('No hay resultados.', 'No results.') + '</p>';
+    input.setAttribute('aria-expanded', String(Boolean(searchMatches.length)));
+  } catch(error) {
+    if (sequence === searchRequest) box.textContent = t('No se pudo buscar. Inténtalo de nuevo.', 'Search could not load. Try again.');
+  } finally { if (sequence === searchRequest) box.removeAttribute('aria-busy'); }
 }
+
 async function navigateToPage(slug) {
   if (!(await confirmUnsaved())) return;
+  $('#searchDialog')?.close();
   history.pushState({}, '', navUrl(state.space, slug));
   $('#searchSuggestions').hidden = true;
   $('#searchInput').setAttribute('aria-expanded', 'false');
@@ -1802,6 +1914,7 @@ function watchTocHeadings(heads, toc, scrollTarget = window) {
         : scrollTarget.getBoundingClientRect().top + Math.min(120, scrollTarget.clientHeight * 0.28);
     let activeIndex = 0;
     for (let i = 0; i < heads.length; i++) {
+      if (!heads[i].getClientRects().length) continue;
       if (heads[i].getBoundingClientRect().top <= threshold) activeIndex = i;
       else break;
     }
@@ -1833,28 +1946,39 @@ function renderToc() {
   const toc = $('#tocLinks'),
     title = $('#tocTitle');
   if (title) title.textContent = t('Secciones', 'Sections');
-  const heads = $$('#article h1,#article h2,#article h3');
+  const heads = $$('#article h1,#article h2,#article h3,#article h4,#article h5,#article h6');
   toc.innerHTML = buildTocTree(heads, 'section');
+  renderArticleTags();
+  toc.hidden = heads.length === 0;
+  if (title) title.closest('h2').hidden = heads.length === 0;
   $$('a[data-toc-index]', toc).forEach((link) => {
-    link.addEventListener('click', () => {
-      let parent = heads[Number(link.dataset.tocIndex)]?.parentElement;
+    link.addEventListener('click', event => {
+      event.preventDefault();
+      const heading = heads[Number(link.dataset.tocIndex)];
+      let parent = heading?.parentElement;
       while (parent && parent !== $('#article')) {
         if (parent.matches('details.wiki-spoiler')) parent.open = true;
         parent = parent.parentElement;
       }
+      if (heading) {
+        history.replaceState(history.state, '', location.pathname + location.search + '#' + heading.id);
+        heading.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+      }
     });
   });
   watchTocHeadings(heads, toc, $('#readingLayout') || window);
-  $('#toc').hidden = heads.length === 0 && $('#lastEdited')?.hidden !== false;
+  $('#toc').hidden = heads.length === 0 && $('#lastEdited')?.hidden !== false && $('#articleTags')?.hidden !== false;
 }
 function renderEditorToc(content) {
   const lastEdited = $('#lastEdited');
   if (lastEdited) lastEdited.hidden = true;
   const toc = $('#tocLinks'),
     title = $('#tocTitle');
+  toc.hidden = false;
+  if (title) title.closest('h2').hidden = false;
   if (title) title.textContent = t('Secciones', 'Sections');
   toc.setAttribute('data-empty-label', t('Añade encabezados para crear el índice.', 'Add headings to create an outline.'));
-  const heads = $$('h1,h2,h3', content);
+  const heads = $('#editPageType')?.value === 'redirect' ? [] : $$('h1,h2,h3,h4,h5,h6', content);
   toc.innerHTML = buildTocTree(heads, 'edit-section');
   $$('a[data-toc-index]', toc).forEach(
     (link) =>
@@ -1885,9 +2009,10 @@ function renderLastEdited() {
       .startsWith('es')
       ? 'es'
       : 'en-US',
-    { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/Guayaquil' },
+    { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: state.config?.site?.timeZone || 'America/Guayaquil' },
   ).format(date);
-  panel.innerHTML = `<span class="last-edited-label">${t('Última edición por', 'Last edited by')}</span><strong>${esc(page.updated_by_name || t('Sistema', 'System'))}</strong><time datetime="${date.toISOString()}">${esc(formatted)}</time>`;
+  panel.innerHTML = `<span class="last-edited-label"><i class="fa-regular fa-clock" aria-hidden="true"></i> ${t('Última edición por', 'Last edited by')}</span><span class="editor-chip">${userAvatarMarkup(page.updated_by_avatar, page.updated_by_name || t('Sistema', 'System'))}<strong>${esc(page.updated_by_name || t('Sistema', 'System'))}</strong></span><time datetime="${date.toISOString()}">${esc(formatted)}</time>`;
+  panel.querySelector('img')?.addEventListener('error', event => event.target.remove(), { once: true });
   panel.hidden = false;
 }
 function renderPage(initialReactions = [], initialMine = '') {
@@ -1898,7 +2023,8 @@ function renderPage(initialReactions = [], initialMine = '') {
       Object.values(state.page?.titles || {})[0] || state.page?.slug || t('Página', 'Page'),
   );
   article.classList.remove('article-enter');
-  article.innerHTML = editorHtmlFromMarkup(state.page?.content?.[state.lang] || '');
+  const pageContent = state.page?.content || {};
+  article.innerHTML = editorHtmlFromMarkup(pageContent[state.lang] || (Number(state.page?.is_wip) ? pageContent[state.lang.split('-')[0]] || Object.values(pageContent).find(Boolean) : '') || '');
   requestAnimationFrame(() => article.classList.add('article-enter'));
   $$('.wiki-spoiler', $('#article')).forEach((spoiler) => {
     const icon = spoiler.querySelector(':scope > summary .spoiler-icon');
@@ -1916,7 +2042,7 @@ function renderPage(initialReactions = [], initialMine = '') {
     `<span>${esc(activeSpace?.name || state.config.site.name)}</span><i class="fa-solid fa-chevron-right"></i><span>${esc(title)}</span>`;
   $('#lastUpdated')?.remove();
   renderToc();
-  $('#reactions').hidden = !state.page;
+  $('#reactions').hidden = !state.page || Boolean(Number(state.page.is_wip));
   let currentCounts = initialReactions,
     currentMood = initialMine || '';
   paintReactions(currentCounts, currentMood);
@@ -1978,6 +2104,20 @@ function renderExternalRedirect(target) {
   $('#reactions').hidden = true;
   $('#toc').hidden = true;
 }
+function showFullPageError() {
+  const error = $('#article .not-found-page:not(.external-redirect-notice)');
+  if (!error) return;
+  const message = `${$('.not-found-code', error)?.textContent || '400'}, ${$('h1', error)?.textContent?.toLowerCase() || 'error'}.`,
+    home = $('a', error)?.getAttribute('href') || '/';
+  document.getElementById('pageErrorScreen')?.remove();
+  error.id = 'pageErrorScreen';
+  error.setAttribute('role', 'main');
+  error.setAttribute('tabindex', '-1');
+  document.body.append(error);
+  document.body.classList.add('page-error-mode');
+  window.TxWikiErrors?.mount(error, { message, home, backLabel: t('Volver', 'Go back'), replayLabel: t('Repetir animación', 'Replay animation') });
+  error.focus({ preventScroll: true });
+}
 async function loadPage(slug, prefetched = null, prefetchedReactions = null, prefetchedMine = '') {
   const sequence = ++pageRequestSequence,
     page = slug
@@ -1993,6 +2133,7 @@ async function loadPage(slug, prefetched = null, prefetchedReactions = null, pre
       `<span>${esc(activeSpace?.name || state.config.site.name)}</span><i class="fa-solid fa-chevron-right"></i><span>404</span>`;
     $('#reactions').hidden = true;
     $('#toc').hidden = true;
+    showFullPageError();
     return;
   }
   if (page.page_type === 'redirect' && page.redirect_url) {
@@ -2013,6 +2154,7 @@ async function loadPage(slug, prefetched = null, prefetchedReactions = null, pre
         `<div class="not-found-page"><h1>${t('Enlace no disponible', 'Link unavailable')}</h1><p>${t('El destino de esta página no es válido.', 'This page has an invalid destination.')}</p></div>`;
       $('#reactions').hidden = true;
       $('#toc').hidden = true;
+      showFullPageError();
       return;
     }
     renderExternalRedirect(target);
@@ -2046,15 +2188,61 @@ async function loadWiki() {
     state.space = route().space;
     renderSpaces();
     const target = route().slug,
-      endpoint = '/api/pages' + (target ? '?slug=' + encodeURIComponent(target) : ''),
+      endpoint = (route().page === 'admin' ? '/api/admin/pages' : '/api/pages') + (target ? '?slug=' + encodeURIComponent(target) : ''),
       result = await api(endpoint);
     state.pages = result.pages;
     state.categories = result.categories;
     state.homePageSlug = result.homePageSlug || null;
     renderNav();
-    await loadPage(target, result.page, result.reactions, result.myReaction);
+    if (route().page !== 'admin') await loadPage(target, result.page, result.reactions, result.myReaction);
   } finally {
     hideLoading();
+  }
+}
+async function dashboardTab(root) {
+  const data = await api('/api/admin/dashboard'),
+    totals = data.totals,
+    cards = [
+      [t('Usuarios registrados', 'Registered users'), totals.users, 'users'],
+      [t('Visitantes únicos · 30 días', 'Unique visitors · 30 days'), totals.visitors, 'visitors'],
+      [t('Páginas publicadas', 'Published pages'), totals.pages, 'pages'],
+    ],
+    chartSeries = [
+      ['users', t('Usuarios', 'Users')],
+      ['visitors', t('Visitantes', 'Visitors')],
+      ['pages', t('Páginas', 'Pages')],
+      ['happy', t('Reacciones positivas', 'Positive reactions')],
+      ['neutral', t('Reacciones neutras', 'Neutral reactions')],
+      ['sad', t('Reacciones negativas', 'Negative reactions')],
+    ],
+    chartRows = data.series || [],
+    chartWidth = 760,
+    chartHeight = 250,
+    chartPoints = chartSeries.map(([key]) => {
+      const values = chartRows.map((row) => Number(row[key]) || 0), max = Math.max(1, ...values);
+      return { key, points: values.map((value, index) => `${chartRows.length <= 1 ? chartWidth / 2 : 42 + index * (chartWidth - 84) / (chartRows.length - 1)},${chartHeight - 24 - value / max * (chartHeight - 48)}`).join(' ') };
+    }),
+    chartSvg = chartRows.length
+      ? `<svg class="dashboard-chart-svg" viewBox="0 0 ${chartWidth} ${chartHeight}" role="img" aria-label="${t('Evolución de estadísticas durante los últimos 30 días', 'Statistics over the last 30 days')}"><line x1="42" y1="20" x2="42" y2="${chartHeight - 24}" class="dashboard-chart-axis"/><line x1="42" y1="${chartHeight - 24}" x2="${chartWidth - 20}" y2="${chartHeight - 24}" class="dashboard-chart-axis"/><line x1="42" y1="${chartHeight / 2}" x2="${chartWidth - 20}" y2="${chartHeight / 2}" class="dashboard-chart-grid"/>${chartPoints.map(({ key, points }) => `<polyline class="dashboard-chart-line series-${key}" points="${points}"/>${points.split(' ').map((point) => { const [cx, cy] = point.split(','); return `<circle class="dashboard-chart-point series-${key}" cx="${cx}" cy="${cy}" r="3"/>`; }).join('')}`).join('')}</svg>`
+      : `<div class="dashboard-chart-empty">${t('Las estadísticas se mostrarán aquí a medida que el sitio registre actividad.', 'Statistics will appear here as the site records activity.')}</div>`,
+    dateLabel = (value) => value ? new Intl.DateTimeFormat(state.lang === 'es' ? 'es-EC' : 'en-US', { day: 'numeric', month: 'short', timeZone: data.timeZone }).format(new Date(`${value}T12:00:00Z`)) : '';
+  root.innerHTML = `<section class="dashboard-metrics" aria-label="${t('Resumen del sitio', 'Site summary')}">${cards.map(([label, value, key]) => `<article class="dashboard-metric"><span class="dashboard-metric-icon"><i class="fa-solid fa-${key === 'users' ? 'users' : key === 'pages' ? 'file-lines' : 'chart-line'}" aria-hidden="true"></i></span><span class="dashboard-metric-label">${label}</span><strong>${Number(value).toLocaleString(state.lang)}</strong></article>`).join('')}</section><div class="dashboard-panels"><section class="dashboard-chart-panel"><div class="dashboard-panel-heading"><div><h2>${t('Actividad del sitio', 'Site activity')}</h2><p>${t('Evolución diaria de usuarios, páginas, visitantes y reacciones.', 'Daily trend for users, pages, visitors, and reactions.')}</p></div><span class="dashboard-period">${t('Últimos 30 días', 'Last 30 days')}</span></div><div class="dashboard-chart-wrap">${chartSvg}</div><div class="dashboard-chart-dates"><span>${esc(dateLabel(chartRows[0]?.day))}</span><span>${esc(dateLabel(chartRows.at(-1)?.day))}</span></div><div class="dashboard-chart-legend">${chartSeries.map(([key, label]) => `<span><i class="series-${key}"></i>${esc(label)}</span>`).join('')}</div></section><div class="dashboard-side-panels"><aside class="dashboard-version-panel"><div class="dashboard-panel-heading"><h2>${t('Versión', 'Version')}</h2><span class="dashboard-version-badge">${esc(data.version)}</span></div><div id="dashboardUpdateStatus" class="dashboard-update-status" role="status">${t('Comprobando actualización…', 'Checking for updates…')}</div></aside><aside class="dashboard-version-panel dashboard-support-panel"><h2>${t('Soporte', 'Support')}</h2><p>${t('Únete a nuestra comunidad de soporte en Discord para recibir ayuda y novedades.', 'Join our support community on Discord for assistance and updates.')}</p><a class="secondary-button" href="https://discord.gg/n6uDZTJ7QR" target="_blank" rel="noopener noreferrer">${t('Unirse ahora', 'Join Now')}</a></aside></div></div>`;
+  const updateStatus = $('#dashboardUpdateStatus', root);
+  if (!data.updatePermission) {
+    updateStatus.textContent = t('Estado de actualización no disponible para este rol.', 'Update status is unavailable for this role.');
+    updateStatus.classList.add('is-muted');
+    return;
+  }
+  try {
+    const update = await api('/api/admin/updates/latest');
+    updateStatus.classList.toggle('is-available', update.available);
+    updateStatus.innerHTML = update.available
+      ? `<p>${t('Hay una actualización disponible: ', 'An update is available: ')}<strong>${esc(update.latestVersion)}</strong></p><button type="button" class="secondary-button" id="dashboardGoUpdates">${t('Ir a actualizaciones', 'Go to updates')} <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>`
+      : `<p>${t('El sistema se encuentra al día.', 'The system is up to date.')}</p>`;
+    $('#dashboardGoUpdates', root)?.addEventListener('click', () => adminView('updates'));
+  } catch {
+    updateStatus.textContent = t('No se pudo comprobar si hay una actualización.', 'Could not check for an update.');
+    updateStatus.classList.add('is-muted');
   }
 }
 function renderHeaderLinks() {
@@ -2070,6 +2258,7 @@ function renderHeaderLinks() {
     const anchor = document.createElement('a');
     anchor.href = link.url;
     anchor.textContent = title;
+    if (link.icon && link.icon !== 'none') anchor.insertAdjacentHTML('afterbegin', pageIconMarkup(link.icon));
     if (link.external) {
       anchor.target = '_blank';
       anchor.rel = 'noopener noreferrer';
@@ -2079,9 +2268,15 @@ function renderHeaderLinks() {
   nav.hidden = !nav.childElementCount;
 }
 function setView(view) {
+  document.body.classList.remove('profile-mode');
+  window.TxWikiErrors?.unmount(document.getElementById('pageErrorScreen'));
+  document.getElementById('pageErrorScreen')?.remove();
+  document.body.classList.remove('page-error-mode');
   for (const id of ['articleWrap', 'authPanel', 'adminPanel', 'passwordWall'])
     $('#' + id).hidden = id !== view;
   document.body.classList.toggle('wiki-mode', view === 'articleWrap');
+  if (view !== 'articleWrap') $('#sidebar').inert = false;
+  if (view === 'articleWrap') renderPublicSidebar();
   document.body.classList.toggle('admin-mode', view === 'adminPanel');
   $('#skipToContent').hidden = view !== 'articleWrap';
   const themedPublicView = ['articleWrap', 'authPanel', 'passwordWall'].includes(view);
@@ -2089,6 +2284,16 @@ function setView(view) {
   syncWikiTheme(themedPublicView);
   document.body.classList.remove('editor-mode');
   $('#adminNavigation').hidden = view !== 'adminPanel';
+  const adminContext = $('#adminTopbarContext'), breadcrumbs = $('#breadcrumbs');
+  adminContext.hidden = view !== 'adminPanel';
+  if (view === 'adminPanel') adminContext.append(breadcrumbs);
+  else $('.topbar').insertBefore(breadcrumbs, $('#headerLinks'));
+  const wikiLink = $('#adminViewWiki');
+  if (wikiLink) {
+    const wikiUrl = state.space === 'main' ? '/' : `/${encodeURIComponent(state.space)}`;
+    wikiLink.href = wikiUrl;
+    $('span', wikiLink).textContent = t('Ver wiki', 'View Wiki');
+  }
   const fullScreen = ['authPanel', 'passwordWall'].includes(view);
   document.body.classList.toggle('auth-fullscreen', fullScreen);
   syncBrowserThemeColor();
@@ -2097,7 +2302,7 @@ function setView(view) {
 }
 function syncBrowserThemeColor() {
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.content = document.body.classList.contains('light') ? '#ffffff' : '#09090b';
+  if (meta) meta.content = document.body.classList.contains('light') ? '#ffffff' : '#090909';
 }
 function syncWikiTheme(enabled) {
   const linkId = 'activeWikiTheme';
@@ -2228,18 +2433,41 @@ function loadAdminUpdatesModule() {
   }
   return adminUpdatesLoadPromise;
 }
-async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
+let profileModulePromise;
+function loadProfileModule() {
+  if (!profileModulePromise) profileModulePromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = '/profile-ui.js';
+    script.onload = () => window.TxWikiProfile ? resolve(window.TxWikiProfile) : reject(new Error('Profile module did not initialize.'));
+    script.onerror = () => { profileModulePromise = null; reject(new Error('Profile module could not be loaded.')); };
+    document.head.append(script);
+  });
+  return profileModulePromise;
+}
+function profileDependencies() {
+  const dialogs = {
+    fire: (...args) => window.Swal.fire(...args),
+    getPopup: () => window.Swal.getPopup(),
+    showValidationMessage: message => window.Swal.showValidationMessage(message),
+  };
+  return { api, t, esc, Swal: dialogs, notify, state, setView, setAuthLink, createCaptchaController, checkPassword, closeMobileNav };
+}
+async function adminView(tab = 'dashboard', { replaceUrl = false } = {}) {
   showLoading();
   const tabDefs = [
+      ['connections', t('Conexiones', 'Connections'), ['connections.manage']],
+      ['dashboard', t('Panel principal', 'Dashboard'), ['admin.view']],
       ['pages', t('Páginas', 'Pages'), ['pages.create_edit', 'pages.delete']],
       ['categories', t('Categorías', 'Categories'), ['categories.create_edit', 'categories.delete']],
       ['header-links', t('Enlaces del encabezado', 'Header Links'), ['header_links.create_edit', 'header_links.delete']],
       [
         'settings',
         t('Sitio general', 'General settings'),
-        ['settings.identity', 'settings.support', 'settings.seo', 'settings.sidebar_label'],
+        ['settings.identity', 'settings.seo', 'settings.sidebar_label'],
       ],
-      ['spaces', t('Espacios de documentación', 'Documentation spaces'), ['spaces.create', 'spaces.edit', 'spaces.delete']],
+      ['support-card', t('Bloque de soporte', 'Support Card'), ['settings.support']],
+      ['wip', 'WIP', ['settings.identity']],
+      ['spaces', t('Espacios', 'Spaces'), ['spaces.create', 'spaces.edit', 'spaces.delete']],
       ['languages', t('Idiomas', 'Languages'), ['languages.create', 'languages.edit', 'languages.delete']],
       [
         'users',
@@ -2273,18 +2501,39 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
   const activeSpace = state.config.spaces.find((space) => space.slug === state.space),
     tabLabels = Object.fromEntries(tabDefs.map(([key, label]) => [key, label]));
   $('#breadcrumbs').innerHTML =
-    `<span>${esc(activeSpace?.name || state.config.site.name)}</span><i class="fa-solid fa-chevron-right"></i><span>${t('Administración', 'Admin')}</span><i class="fa-solid fa-chevron-right"></i><span>${tabLabels[tab] || tabLabels.pages}</span>`;
+    `<span>${t('Administración', 'Administration')}</span><i class="fa-solid fa-chevron-right"></i>${['pages', 'categories'].includes(tab) ? `<span>${esc(activeSpace?.name || state.config.site.name)}</span><i class="fa-solid fa-chevron-right"></i>` : ''}<span>${tabLabels[tab] || tabLabels.pages}</span>`;
   const panel = $('#adminPanel');
-  panel.innerHTML = `<div class="admin-heading"><div><h1>${t('Administración', 'Administration')}</h1><p>${t('Configura tus espacios, páginas e idiomas.', 'Manage your spaces, pages, and languages.')}</p></div><a class="secondary-button" href="${state.space === 'main' ? '/' : '/' + encodeURIComponent(state.space)}"><i class="fa-solid fa-arrow-left"></i> ${t('Volver a la wiki', 'Back to wiki')}</a></div><div class="admin-message auth-error" hidden></div><div id="adminContent"></div>`;
+  panel.innerHTML = `<div class="admin-heading"><div><span class="admin-eyebrow">${t('Administración', 'Administration')}</span><h1>${esc(tabLabels[tab] || tabLabels.pages)}</h1></div></div><div class="admin-message auth-error" hidden></div><div id="adminContent"></div>`;
   const icons = {
-    pages: 'file-lines', categories: 'folder-tree', 'header-links': 'link', settings: 'sliders', spaces: 'layer-group', languages: 'language',
-    users: 'users', roles: 'user-shield', proxy: 'network-wired', smtp: 'envelope',
+    dashboard: 'gauge', pages: 'file-lines', categories: 'folder-tree', 'header-links': 'link', settings: 'sliders', 'support-card': 'headset', wip: 'screwdriver-wrench', spaces: 'layer-group', languages: 'language',
+    users: 'users', roles: 'user-shield', proxy: 'network-wired', smtp: 'envelope', connections: 'plug',
     backups: 'database', captcha: 'shield-halved', logs: 'clipboard-list', jobs: 'gears', themes: 'palette', updates: 'cloud-arrow-up',
   };
   const navigation = $('#adminNavigation');
   navigation.setAttribute('aria-label', t('Administración', 'Administration'));
-  navigation.innerHTML = visible.map(([key, label]) =>
-    `<button type="button" data-tab="${key}" class="admin-nav-item${tab === key ? ' active' : ''}"${tab === key ? ' aria-current="page"' : ''}><i class="fa-solid fa-${icons[key]}" aria-hidden="true"></i><span>${esc(label)}</span>${key === 'updates' ? '<span class="admin-nav-beta">BETA</span>' : ''}</button>`).join('');
+  const groups = [
+      [t('General', 'General'), ['dashboard']],
+      [t('Documentación', 'Documentation'), ['pages', 'categories', 'spaces']],
+      [t('Navegación', 'Navigation'), ['header-links']],
+      [t('Personalización', 'Customization'), ['settings', 'support-card', 'wip', 'languages', 'themes']],
+      [t('Acceso y seguridad', 'Access & security'), ['users', 'roles', 'captcha']],
+      [t('Operaciones', 'Operations'), ['connections', 'proxy', 'smtp', 'backups', 'logs', 'jobs', 'updates']],
+    ],
+    groupedNavigation = groups.map(([title, keys]) => {
+      const items = visible.filter(([key]) => keys.includes(key));
+      if (!items.length) return '';
+      return `<section class="admin-nav-group"><h2>${esc(title)}</h2>${items.map(([key, label]) =>
+        `<button type="button" data-tab="${key}" class="admin-nav-item${tab === key ? ' active' : ''}"${tab === key ? ' aria-current="page"' : ''}><i class="fa-solid fa-${icons[key]}" aria-hidden="true"></i><span>${esc(label)}</span>${key === 'updates' ? '<span class="admin-nav-beta">BETA</span>' : ''}</button>`).join('')}</section>`;
+    }).join('');
+  const siteName = state.config.site.name || 'Teralth Studio',
+    initials = siteName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase(),
+    logo = state.config.site.logo
+      ? `<img src="${esc(state.config.site.logo)}" alt="" class="admin-brand-logo">`
+      : `<span class="admin-brand-initials" aria-hidden="true">${esc(initials || 'T')}</span>`;
+  $('.brand-row').classList.add('admin-brand-row');
+  $('.brand-row').innerHTML = `<div class="admin-brand">${logo}<div><strong>${esc(siteName)}</strong><span>${t('Administración', 'Administration')}</span></div></div><button class="icon-button mobile-close" id="closeSidebar" aria-label="${t('Cerrar menú', 'Close menu')}"><i class="fa-solid fa-xmark"></i></button>`;
+  $('#closeSidebar').onclick = closeMobileNav;
+  navigation.innerHTML = groupedNavigation;
   $$('[data-tab]', navigation).forEach(
     (button) =>
       (button.onclick = async () => {
@@ -2295,7 +2544,11 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
   );
   const content = $('#adminContent');
   try {
+    if (tab === 'connections') await (await loadProfileModule()).adminConnections(content, profileDependencies());
+    if (tab === 'dashboard') await dashboardTab(content);
     if (tab === 'settings') await settingsTab(content);
+    if (tab === 'support-card') supportCardTab(content);
+    if (tab === 'wip') wipTab(content);
     if (tab === 'spaces') await spacesTab(content);
     if (tab === 'languages') await languagesTab(content);
     if (tab === 'users') await usersTab(content);
@@ -2315,10 +2568,18 @@ async function adminView(tab = 'pages', { replaceUrl = false } = {}) {
         esc,
         showError,
         csrf: state.csrf,
+        timeZone: state.config.site.timeZone,
         navigate: (nextTab) => adminView(nextTab),
         startSeparateUpdate: (update) => updatesModule.openProgressPage({ ...update, t }),
         canManageBackups: canAny(['backups.import', 'backups.export', 'backups.schedule']),
       });
+    }
+    if (tab === 'pages' || tab === 'categories') {
+      const result = await api(tab === 'pages' ? '/api/admin/pages' : '/api/admin/categories');
+      if (!content.isConnected) return;
+      state.pages = result.pages || [];
+      state.categories = result.categories || [];
+      state.homePageSlug = result.homePageSlug || null;
     }
     if (tab === 'pages') await pagesTab(content);
     if (tab === 'categories') await categoriesTab(content);
@@ -2488,30 +2749,19 @@ function settingsGroup(title, ...elements) {
   section.append(heading, ...elements);
   return section;
 }
-async function settingsTab(root) {
-  const config = state.config;
-  root.innerHTML = `<section class="admin-section"><h2>${t('Identidad del sitio', 'Site identity')}</h2><p>${t('Nombre y logotipo visibles en la wiki.', 'Name and logo shown in the wiki.')}</p><div class="settings-row"><label><span class="admin-label">${t('Nombre del sitio', 'Site name')}</span><input class="settings-input" id="siteName" maxlength="120" value="${esc(config.site.name)}"></label><label><span class="admin-label">${t('Contacto de soporte', 'Support contact URL or email')}</span><input class="settings-input" id="supportUrl" maxlength="500" placeholder="https://... o mailto:ayuda@..." value="${esc(config.site.supportUrl || '')}"></label><label><span class="admin-label">${t('Subir logotipo', 'Upload logo')}</span><input class="settings-input" id="siteLogo" type="hidden" value="${esc(config.site.logo || '')}"><input id="siteLogoFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp"><span id="siteLogoStatus">${esc(config.site.logo || '')}</span></label></div></section><section class="admin-section browser-identity-section" id="browserIdentitySettings"><h2>${t('Título del navegador y favicon', 'Browser title and favicon')}</h2><p>${t('Configura el título de la pestaña y el icono del sitio, separados del logotipo de la wiki.', 'Set the browser tab title and site icon separately from the wiki logo.')}</p><div class="browser-identity-grid"><label><span class="admin-label">${t('Título del navegador', 'Browser title')}</span><input class="settings-input" id="pageTitle" maxlength="120" required value="${esc(config.site.pageTitle || config.site.name)}" ${can('settings.identity') ? '' : 'disabled'}></label><div class="favicon-field"><span class="admin-label">${t('Favicon del sitio', 'Site favicon')}</span><div class="favicon-controls"><img id="faviconPreview" src="${esc(config.site.favicon || '/assets/favicon.svg')}" alt="" width="32" height="32"><input class="settings-input" id="faviconPath" type="hidden" value="${esc(config.site.favicon || '/assets/favicon.svg')}"><input id="faviconFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" ${can('settings.identity') ? '' : 'disabled'}><button type="button" class="secondary-button" id="resetFavicon" ${can('settings.identity') ? '' : 'disabled'}>${t('Usar predeterminado', 'Use default')}</button></div><span class="favicon-status" id="faviconStatus">${esc(config.site.favicon || '/assets/favicon.svg')}</span></div></div></section><section class="admin-section" id="sidebarLabelSettings"><h2>${t('Etiqueta de la barra lateral', 'Sidebar label')}</h2><p>${t('Texto que aparece junto al selector de tema claro y oscuro.', 'Text shown beside the light and dark theme switch.')}</p><label><span class="admin-label">${t('Texto visible', 'Display text')}</span><input class="settings-input" id="sidebarLabelInput" maxlength=80 required value="${esc(config.site.sidebarLabel || t('Documentación', 'Documentation'))}" ${can('settings.sidebar_label') ? '' : 'disabled'}></label></section><section class="admin-section"><h2>${t('Espacios de documentación', 'Documentation spaces')}</h2><p>${t('Cada espacio tendrá su propia ruta, por ejemplo /ThJumpPads.', 'Each space has its own route, for example /ThJumpPads.')}</p><div id="spaceRows">${config.spaces.map((sp) => spaceRow(sp)).join('')}</div><button class="secondary-button" id="addSpace"><i class="fa-solid fa-plus"></i> ${t('Añadir espacio', 'Add space')}</button></section><button class="primary-button" id="saveSettings"><i class="fa-solid fa-floppy-disk"></i> ${t('Guardar cambios', 'Save changes')}</button>`;
-  $('#spaceRows', root)?.closest('.admin-section')?.remove();
-  const sections = $$('.admin-section', root);
-  const identity = sections[0],
-    supportUrlField = $('#supportUrl', root).closest('label'),
-    faviconField = $('.favicon-field', root),
-    seoSection = $('#browserIdentitySettings', root),
+function settingsLanguageName(code) {
+    const item = (state.config.languageCatalog || []).find((entry) => entry.code === code);
+    if (item?.name) return item.name;
+    try {
+      return new Intl.DisplayNames([code], { type: 'language' }).of(code) || code;
+    } catch {
+      return code;
+    }
+}
+function supportCardTab(root) {
+  const config = state.config,
     storedSupport = config.site.support || {},
-    supportDraft = structuredClone(storedSupport.translations || {}),
-    seo = config.site.seo || {};
-  $('#pageTitle', root).closest('label').remove();
-  const siteNameField = $('#siteName', root).closest('label'),
-    siteLogoField = $('#siteLogoFile', root).closest('label'),
-    brandFields = document.createElement('div');
-  supportUrlField.remove();
-  brandFields.className = 'settings-group-grid';
-  brandFields.append(siteLogoField, faviconField);
-  $('.settings-row', identity).remove();
-  identity.append(
-    settingsGroup(t('Datos del sitio', 'Site details'), siteNameField),
-    settingsGroup(t('Identidad visual', 'Visual identity'), brandFields),
-  );
+    supportDraft = structuredClone(storedSupport.translations || {});
   const supportSection = document.createElement('section');
   supportSection.className = 'admin-section support-settings';
   supportSection.innerHTML = `
@@ -2532,7 +2782,7 @@ async function settingsTab(root) {
         <section class="support-editor-group">
           <h3>${t('Contenido', 'Content')}</h3>
           <div class="support-fields">
-            <label class="support-field-wide"><span class="admin-label">${t('Idioma', 'Language')}</span><select class="settings-input" id="supportLanguage">${config.languages.map(code => `<option value="${esc(code)}">${esc(code)}</option>`).join('')}</select></label>
+            <label class="support-field-wide"><span class="admin-label">${t('Idioma', 'Language')}</span><select class="settings-input" id="supportLanguage">${config.languages.map(code => `<option value="${esc(code)}">${esc(settingsLanguageName(code))}</option>`).join('')}</select></label>
             <label class="support-field-wide"><span class="admin-label">${t('Título', 'Title')}</span><input class="settings-input" id="supportTitleInput" maxlength="120"></label>
             <label class="support-field-wide"><span class="admin-label">${t('Descripción', 'Description')}</span><textarea class="settings-input" id="supportDescriptionInput" maxlength="500" rows="3"></textarea></label>
           </div>
@@ -2565,8 +2815,8 @@ async function settingsTab(root) {
         </div>
       </aside>
     </div>`;
-  $('#supportContactFields', supportSection).append(supportUrlField);
-  identity.after(supportSection);
+  $('#supportContactFields', supportSection).insertAdjacentHTML('beforeend', `<label><span class="admin-label">${t('Contacto de soporte', 'Support contact URL or email')}</span><input class="settings-input" id="supportUrl" maxlength="500" placeholder="https://... o mailto:ayuda@..." value="${esc(config.site.supportUrl || '')}"></label>`);
+  root.append(supportSection);
   for (const [id, fallback] of [
     ['supportBackground', '#171b2b'], ['supportBackgroundEnd', '#15161b'],
     ['supportButtonBackground', '#813cf0'], ['supportButtonBackgroundEnd', '#514ee4'],
@@ -2626,6 +2876,100 @@ async function settingsTab(root) {
   supportLanguage.value = supportLanguage.dataset.current;
   updateSupportPreview();
   if (state.lang !== supportLanguage.value) void updatePreviewLanguage(supportLanguage.value);
+  addSettingsSaveButton(root);
+  bindSettingsSave(root, () => ({
+    supportUrl: $('#supportUrl', root).value,
+    support: {
+      enabled: $('#supportCardEnabled', root).checked,
+      translations: { ...supportDraft, [supportLanguage.value]: readSupport() },
+      background: $('#supportBackground', root).value.trim(),
+      backgroundEnd: $('#supportBackgroundEnd', root).value.trim(),
+      buttonBackground: $('#supportButtonBackground', root).value.trim(),
+      buttonBackgroundEnd: $('#supportButtonBackgroundEnd', root).value.trim(),
+    },
+  }));
+}
+function addSettingsSaveButton(root) {
+  root.insertAdjacentHTML('beforeend', `<button class="primary-button" id="saveSettings"><i class="fa-solid fa-floppy-disk"></i> ${t('Guardar cambios', 'Save changes')}</button>`);
+}
+function bindSettingsSave(root, values) {
+  $('#saveSettings', root).onclick = async () => {
+    try {
+      await api('/api/admin/settings', { method: 'PUT', body: JSON.stringify(values()) });
+      state.dirty = false;
+      state.config = await api('/api/config');
+      renderSpaces();
+      renderLanguageMenu();
+      updateBrand();
+      renderSupportCard();
+      await notify({
+        icon: 'success',
+        title: t('Configuración guardada', 'Settings saved'),
+        confirmButtonText: t('Entendido', 'Got it'),
+      });
+    } catch (error) {
+      showError(root, error);
+    }
+  };
+}
+function wipTab(root) {
+  const config = state.config;
+  const draft = structuredClone(config.site.wipContent || {});
+  root.innerHTML = `<section class="admin-section" id="wipContentSettings"><h2>${t('Contenido de páginas WIP', 'WIP page content')}</h2><p>${t('Este contenido reemplaza los artículos que están en mantenimiento.', 'This content replaces articles marked as work in progress.')}</p><label><span class="admin-label">${t('Idioma', 'Language')}</span><select id="wipLanguage" class="settings-input">${config.languages.map(code => `<option value="${esc(code)}">${esc(settingsLanguageName(code))}</option>`).join('')}</select></label><div class="editor-toolbar">${editorToolbarMarkup()}</div><div class="editor-content" id="wipContentEditor" role="textbox" contenteditable="true" aria-multiline="true" aria-label="${t('Contenido', 'Content')}"></div><textarea class="editor-source" aria-label="${t('Código fuente', 'Source format')}" hidden spellcheck="false"></textarea></section>`;
+  const language = $('#wipLanguage', root), content = $('#wipContentEditor', root), source = $('.editor-source', root);
+  language.value = config.languages.includes(state.lang) ? state.lang : config.languages[0];
+  let locale = language.value;
+  const value = () => source.hidden ? editorMarkupFromHtml(editorContentHtml(content)) : source.value;
+  const fill = () => {
+    source.value = draft[locale] || '';
+    content.innerHTML = editorHtmlFromMarkup(source.value);
+    editorInlineCodeToText(content);
+    prepareEditorWidgets(content);
+  };
+  fill();
+  language.onchange = () => { draft[locale] = value(); locale = language.value; fill(); };
+  const refresh = bindFormattingToolbar(root, content, source);
+  $('[data-source-toggle]', root).onclick = event => {
+    const entering = source.hidden;
+    draft[locale] = value();
+    fill();
+    source.hidden = !entering;
+    content.hidden = entering;
+    event.currentTarget.classList.toggle('active', entering);
+    $$('.editor-toolbar button:not([data-source-toggle]), .editor-toolbar select', root).forEach(control => { control.disabled = entering; });
+    (entering ? source : content).focus();
+    refresh();
+  };
+  addSettingsSaveButton(root);
+  bindSettingsSave(root, () => ({ wipContent: { ...draft, [locale]: value() } }));
+}
+async function settingsTab(root) {
+  const config = state.config;
+  root.innerHTML = `<section class="admin-section"><h2>${t('Identidad del sitio', 'Site identity')}</h2><p>${t('Nombre y logotipo visibles en la wiki.', 'Name and logo shown in the wiki.')}</p><div class="settings-row"><label><span class="admin-label">${t('Nombre del sitio', 'Site name')}</span><input class="settings-input" id="siteName" maxlength="120" value="${esc(config.site.name)}"></label><label><span class="admin-label">${t('Subir logotipo', 'Upload logo')}</span><input class="settings-input" id="siteLogo" type="hidden" value="${esc(config.site.logo || '')}"><input id="siteLogoFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp"><span id="siteLogoStatus">${esc(config.site.logo || '')}</span></label></div></section><section class="admin-section browser-identity-section" id="browserIdentitySettings"><h2>${t('Título del navegador y favicon', 'Browser title and favicon')}</h2><p>${t('Configura el título de la pestaña y el icono del sitio, separados del logotipo de la wiki.', 'Set the browser tab title and site icon separately from the wiki logo.')}</p><div class="browser-identity-grid"><label><span class="admin-label">${t('Título del navegador', 'Browser title')}</span><input class="settings-input" id="pageTitle" maxlength="120" required value="${esc(config.site.pageTitle || config.site.name)}" ${can('settings.identity') ? '' : 'disabled'}></label><div class="favicon-field"><span class="admin-label">${t('Favicon del sitio', 'Site favicon')}</span><div class="favicon-controls"><img id="faviconPreview" src="${esc(config.site.favicon || '/assets/favicon.svg')}" alt="" width="32" height="32"><input class="settings-input" id="faviconPath" type="hidden" value="${esc(config.site.favicon || '/assets/favicon.svg')}"><input id="faviconFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" ${can('settings.identity') ? '' : 'disabled'}><button type="button" class="secondary-button" id="resetFavicon" ${can('settings.identity') ? '' : 'disabled'}>${t('Usar predeterminado', 'Use default')}</button></div><span class="favicon-status" id="faviconStatus">${esc(config.site.favicon || '/assets/favicon.svg')}</span></div></div></section><section class="admin-section" id="sidebarLabelSettings"><h2>${t('Etiqueta de la barra lateral', 'Sidebar label')}</h2><p>${t('Texto que aparece junto al selector de tema claro y oscuro.', 'Text shown beside the light and dark theme switch.')}</p><label><span class="admin-label">${t('Texto visible', 'Display text')}</span><input class="settings-input" id="sidebarLabelInput" maxlength=80 required value="${esc(config.site.sidebarLabel || t('Documentación', 'Documentation'))}" ${can('settings.sidebar_label') ? '' : 'disabled'}></label></section><button class="primary-button" id="saveSettings"><i class="fa-solid fa-floppy-disk"></i> ${t('Guardar cambios', 'Save changes')}</button>`;
+  const sections = $$('.admin-section', root);
+  $('#sidebarLabelSettings h2', root).textContent = t('Contenido del pie de página', 'Footer content');
+  $('#sidebarLabelSettings p', root).textContent = t('Texto visible en el pie de página de la wiki.', 'Text displayed in the wiki footer.');
+  const identity = sections[0],
+    faviconField = $('.favicon-field', root),
+    seoSection = $('#browserIdentitySettings', root),
+    seo = config.site.seo || {};
+  $('#pageTitle', root).closest('label').remove();
+  const siteNameField = $('#siteName', root).closest('label'),
+    siteLogoField = $('#siteLogoFile', root).closest('label'),
+    brandFields = document.createElement('div');
+  brandFields.className = 'settings-group-grid';
+  brandFields.append(siteLogoField, faviconField);
+  $('.settings-row', identity).remove();
+  const zoneField = document.createElement('label');
+  const zones = new Set(['UTC', config.site.timeZone, ...Intl.supportedValuesOf('timeZone')].filter(Boolean));
+  zoneField.innerHTML = `<span class="admin-label">${t('Zona horaria', 'Time zone')}</span><select id="siteTimeZone" class="settings-input">${[...zones].sort().map(zone => `<option value="${esc(zone)}" ${zone === config.site.timeZone ? 'selected' : ''}>${esc(zone)}</option>`).join('')}</select>`;
+  const siteDetailsFields = document.createElement('div');
+  siteDetailsFields.className = 'settings-group-grid site-details-fields';
+  siteDetailsFields.append(siteNameField, zoneField);
+  identity.append(
+    settingsGroup(t('Datos del sitio', 'Site details'), siteDetailsFields),
+    settingsGroup(t('Identidad visual', 'Visual identity'), brandFields),
+  );
   seoSection.innerHTML = `<h2>SEO</h2><p>${t('Configura cómo aparece el sitio en buscadores y redes sociales.', 'Configure how the site appears in search engines and social media.')}</p><div class="settings-row"><label><span class="admin-label">${t('Descripción del sitio', 'Site description')}</span><input class="settings-input" id="seoDescription" maxlength="320" value="${esc(seo.description || '')}"></label><label><span class="admin-label">${t('Título para redes sociales', 'Social media title')}</span><input class="settings-input" id="seoSocialTitle" maxlength="120" value="${esc(seo.socialTitle || '')}"></label><label><span class="admin-label">${t('Descripción para redes sociales', 'Social media description')}</span><input class="settings-input" id="seoSocialDescription" maxlength="320" value="${esc(seo.socialDescription || '')}"></label><label><span class="admin-label">${t('Imagen para redes sociales (URL o imagen subida)', 'Social media image (URL or uploaded image)')}</span><input class="settings-input" id="seoSocialImage" maxlength="2048" value="${esc(seo.socialImage || '')}"><input type="file" id="seoImageFile" accept="image/png,image/jpeg,image/gif,image/webp"></label><label><span class="admin-label">${t('URL canónica base', 'Canonical base URL')}</span><input class="settings-input" id="seoCanonical" type="url" maxlength="2048" value="${esc(seo.canonicalBase || '')}"></label></div><label class="seo-indexing"><input id="seoIndexable" type="checkbox" ${seo.indexable === false ? '' : 'checked'}> ${t('Permitir indexación por buscadores', 'Allow search engine indexing')}</label>`;
   const seoSearchFields = document.createElement('div'),
     seoSocialFields = document.createElement('div');
@@ -2664,13 +3008,11 @@ async function settingsTab(root) {
   $('#sidebarLabelSettings h2', root).textContent = t('Contenido del pie de página', 'Footer content');
   $('#sidebarLabelSettings p', root).textContent = t('Texto que aparece en el pie de página.', 'Text shown in the footer.');
   if (sections[0]) sections[0].hidden = !can('settings.identity');
-  supportSection.hidden = !can('settings.support');
   $('#browserIdentitySettings', root).hidden = !can('settings.seo');
   if ($('#sidebarLabelSettings', root))
     $('#sidebarLabelSettings', root).hidden = !can('settings.sidebar_label');
   $('#saveSettings', root).hidden = !canAny([
     'settings.identity',
-    'settings.support',
     'settings.seo',
     'settings.sidebar_label',
   ]);
@@ -2735,25 +3077,13 @@ async function settingsTab(root) {
       showError($('#adminPanel'), error);
     }
   };
-  $('#saveSettings', root).onclick = async () => {
-    try {
-      await api('/api/admin/settings', {
-        method: 'PUT',
-        body: JSON.stringify({
-          name: $('#siteName', root).value,
-          favicon: $('#faviconPath', root).value,
-          logo: $('#siteLogo', root).value,
-          supportUrl: can('settings.support') ? $('#supportUrl', root).value : config.site.supportUrl,
-          ...(can('settings.support') ? {
-            support: {
-              enabled: $('#supportCardEnabled', root).checked,
-              translations: { ...supportDraft, [supportLanguage.value]: readSupport() },
-              background: $('#supportBackground', root).value.trim(),
-              backgroundEnd: $('#supportBackgroundEnd', root).value.trim(),
-              buttonBackground: $('#supportButtonBackground', root).value.trim(),
-              buttonBackgroundEnd: $('#supportButtonBackgroundEnd', root).value.trim(),
-            },
-          } : {}),
+  bindSettingsSave(root, () => ({
+    ...(can('settings.identity') ? {
+      name: $('#siteName', root).value,
+      logo: $('#siteLogo', root).value,
+      favicon: $('#faviconPath', root).value,
+      timeZone: $('#siteTimeZone', root).value,
+    } : {}),
           ...(can('settings.seo') ? {
             seo: {
               description: $('#seoDescription', root).value,
@@ -2764,140 +3094,170 @@ async function settingsTab(root) {
               canonicalBase: $('#seoCanonical', root).value,
             },
           } : {}),
-          sidebarLabel: can('settings.sidebar_label')
-            ? $('#sidebarLabelInput', root).value
-            : config.site.sidebarLabel,
-        }),
-      });
-      state.config = await api('/api/config');
-      renderSpaces();
-      renderLanguageMenu();
-      updateBrand();
-      renderSupportCard();
-      await notify({
-        icon: 'success',
-        title: t('Configuración guardada', 'Settings saved'),
-        confirmButtonText: t('Entendido', 'Got it'),
-      });
-    } catch (error) {
-      showError($('#adminPanel'), error);
-    }
-  };
-}
-async function spacesTab(root) {
-  const config = state.config;
-  root.innerHTML = `<section class="admin-section spaces-admin-section"><div class="section-heading"><div><h2><i class="fa-solid fa-layer-group" aria-hidden="true"></i> ${t('Espacios de documentación', 'Documentation spaces')}</h2><p>${t('Cada espacio tiene su propia ruta, navegación y logotipo.', 'Each space has its own route, navigation, and logo.')}</p></div></div><div id="spaceRows">${(config.spaces || []).map(spaceRow).join('')}</div><div class="language-admin-actions"><button class="secondary-button" id="addSpace" type="button"><i class="fa-solid fa-plus"></i> ${t('Añadir espacio', 'Add space')}</button><button class="primary-button" id="saveSpaces" type="button"><i class="fa-solid fa-floppy-disk"></i> ${t('Guardar cambios', 'Save changes')}</button></div></section>`;
-  const rows = $('#spaceRows', root);
-  $('#addSpace', root).hidden = !can('spaces.create');
-  $('#saveSpaces', root).hidden = !canAny(['spaces.create', 'spaces.edit', 'spaces.delete']);
-  if (!can('spaces.delete')) $$('.remove-space', root).forEach((button) => { button.hidden = true; });
-  if (!can('spaces.edit')) $$('.space-admin-row', root).forEach((row) => {
-    if ($('[data-field=slug]', row).value) {
-      $$('[data-field]', row).forEach((input) => { input.disabled = true; });
-      $('[data-space-mode]', row).disabled = true;
-      $('.space-logo-file', row).disabled = true;
-      $('.space-drag-handle', row).disabled = true;
-    }
-  });
-  $('#addSpace', root).onclick = () => rows.insertAdjacentHTML('beforeend', spaceRow({
-    slug: '', name: '', icon: 'fa-solid fa-book-open', logo: '',
+    ...(can('settings.sidebar_label') ? { sidebarLabel: $('#sidebarLabelInput', root).value } : {}),
   }));
-  rows.onchange = async (event) => {
-    const mode = event.target.closest('[data-space-mode]');
-    if (mode) {
-      const row = mode.closest('.space-admin-row'), imageMode = mode.value === 'image';
-      $('.space-icon-field', row).hidden = imageMode;
-      $('.space-logo-upload', row).hidden = !imageMode;
-      $('[data-field=logo]', row).disabled = !imageMode;
-      $('.space-logo-file', row).disabled = !imageMode;
-      if (!imageMode) {
-        $('[data-field=logo]', row).value = '';
-        setSpaceLogoStatus(row, '');
+}
+function navigationTitle(item) {
+  const titles = item.titles || {};
+  return titles[state.lang] || titles[state.lang.split('-')[0]] || Object.values(titles).find(Boolean) || item.name || item.url;
+}
+
+function navigationLanguageName(code) {
+  const entry = state.config.languageCatalog?.find(language => language.code === code);
+  return entry?.name || new Intl.DisplayNames([code], { type: 'language' }).of(code);
+}
+
+async function navigationImageUpload(file) {
+  const body = new FormData();
+  body.append('image', file);
+  const response = await request('/api/admin/uploads', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'X-Wiki-Space': state.space, 'X-CSRF-Token': state.csrf }, body,
+  });
+  return (await imageUploadResponse(response)).url;
+}
+
+async function navigationItemModal(isSpace, item, save) {
+  const languages = state.config.languages;
+  const titles = Object.fromEntries(Object.entries(item?.titles || {}).filter(([code]) => languages.includes(code)));
+  if (isSpace && item?.name && !Object.keys(titles).length) titles[languages[0]] = item.name;
+  const focusLanguage = titles[state.lang] ? state.lang : Object.keys(titles)[0] || (languages.includes(state.lang) ? state.lang : languages[0]);
+  const routeLabel = isSpace ? t('Slug', 'Slug') : t('URL de redirección', 'Redirect URL');
+  const routeField = `<label><span class="admin-label">${routeLabel}</span><input class="settings-input" id="navigationRoute" maxlength="${isSpace ? 100 : 2048}" required value="${esc(isSpace ? item?.slug || '' : item?.url || '')}" ${isSpace ? 'pattern="[A-Za-z0-9\\-]+"' : ''} ${isSpace && item?.slug === 'main' ? 'readonly' : ''}></label>`;
+  const brand = brandFields('navigationBrand', item?.logo || item?.icon || 'none', 'none', { iconOnly: !isSpace });
+  const title = isSpace
+    ? (item ? t('Editar espacio', 'Edit space') : t('Añadir espacio', 'Add space'))
+    : (item ? t('Editar enlace', 'Edit header link') : t('Añadir enlace', 'Add header link'));
+  let form, controller;
+  return (isSpace ? brandFormDialog : settings => Swal.fire(settings))({
+    title, width: 'min(640px, 94vw)', showCancelButton: true, reverseButtons: true,
+    cancelButtonText: t('Cancelar', 'Cancel'), confirmButtonText: t('Guardar', 'Save'),
+    html: `<form class="navigation-modal"><div class="navigation-field-pair"><label><span class="admin-label">${t('División de idioma','Language division')}</span><select id="navigationLanguage" class="settings-input">${languages.map(code => `<option value="${esc(code)}" ${code === focusLanguage ? 'selected' : ''}>${esc(navigationLanguageName(code))}</option>`).join('')}</select></label><label><span class="admin-label">${isSpace ? t('Título del espacio','Space title') : t('Título','Title')}</span><input class="settings-input" id="navigationTitle" maxlength="${isSpace ? 120 : 80}" value="${esc(titles[focusLanguage] || '')}"></label></div>${isSpace ? routeField + brand : brand + routeField}</form>`,
+    didOpen: popup => {
+      form = $('.navigation-modal', popup);
+      const language = $('#navigationLanguage', form), input = $('#navigationTitle', form), route = $('#navigationRoute', form);
+      input.oninput = () => { titles[language.value] = input.value; };
+      language.onchange = () => { input.value = titles[language.value] || ''; };
+      if (isSpace) route.oninput = () => { route.value = route.value.replace(/ /g, '-'); };
+      controller = bindBrandFields(form, 'navigationBrand', { upload: navigationImageUpload });
+      form.onsubmit = event => { event.preventDefault(); Swal.clickConfirm(); };
+    },
+    showLoaderOnConfirm: true, allowOutsideClick: () => !Swal.isLoading(),
+    preConfirm: async () => {
+      const translated = Object.fromEntries(Object.entries(titles).map(([code, value]) => [code,value.trim()]).filter(([, value]) => value));
+      if (!Object.keys(translated).length) {
+        Swal.showValidationMessage(t('Añade un título en al menos un idioma.', 'Enter a title in at least one language.'));
+        return false;
       }
-      return;
-    }
-    const input = event.target.closest('.space-logo-file'), file = input?.files?.[0];
-    if (!file) return;
-    const row = input.closest('.space-admin-row'), status = $('.space-logo-status', row);
-    input.disabled = true;
-    status.textContent = t('Subiendo imagen…', 'Uploading image…');
-    try {
-      const body = new FormData();
-      body.append('image', file);
-      body.append('alt', $('[data-field=name]', row).value.trim());
-      const response = await request('/api/admin/uploads', {
-        method: 'POST', credentials: 'same-origin',
-        headers: { 'X-Wiki-Space': state.space, 'X-CSRF-Token': state.csrf }, body,
-      });
-      const data = await imageUploadResponse(response);
-      $('[data-field=logo]', row).value = data.url;
-      setSpaceLogoStatus(row, data.url);
-      setNotice(t('Imagen subida. Guarda cambios para aplicar el logo.', 'Image uploaded. Save changes to apply the logo.'));
-    } catch (error) {
-      status.textContent = '';
-      showError($('#adminPanel'), error);
-    } finally {
-      input.disabled = false;
-      input.value = '';
-    }
-  };
-  rows.onclick = (event) => {
-    const remove = event.target.closest('.remove-space');
-    if (remove && can('spaces.delete')) remove.closest('.space-admin-row').remove();
-  };
-  let dragged = null;
-  rows.addEventListener('dragstart', (event) => {
-    const handle = event.target.closest('.space-drag-handle');
-    if (!handle || !can('spaces.edit')) { event.preventDefault(); return; }
-    dragged = handle.closest('.space-admin-row');
-    dragged.classList.add('dragging');
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', 'space');
+      if (!form.reportValidity() || !controller.valid()) return false;
+      const value = controller.value(), route = $('#navigationRoute', form).value.trim();
+      try {
+        await save(isSpace
+          ? { titles: translated, slug: route, icon: value.startsWith('/media/') ? 'none' : value, logo: value.startsWith('/media/') ? value : '' }
+          : { titles: translated, url: route, external: /^https?:\/\//i.test(route), icon: value });
+      } catch (error) {
+        Swal.showValidationMessage(esc(error.message));
+        return false;
+      }
+    },
   });
-  rows.addEventListener('dragover', (event) => {
-    const target = event.target.closest('.space-admin-row');
-    if (!target || !dragged || target === dragged) return;
-    event.preventDefault();
-    const rect = target.getBoundingClientRect();
-    rows.insertBefore(dragged, event.clientY < rect.top + rect.height / 2 ? target : target.nextSibling);
-  });
-  rows.addEventListener('drop', (event) => { if (dragged) event.preventDefault(); });
-  rows.addEventListener('dragend', () => {
-    if (dragged) dragged.classList.remove('dragging');
-    dragged = null;
-  });
-  $('#saveSpaces', root).onclick = async () => {
-    try {
-      const spaces = $$('.space-admin-row', root).map((row) => {
-        if ($('[data-space-mode]', row).value === 'image' && !$('[data-field=logo]', row).value)
-          throw validationError(t('Sube una imagen para cada espacio configurado en modo imagen.', 'Upload an image for each space set to image mode.'));
-        return {
-          slug: $('[data-field=slug]', row).value.trim(),
-          name: $('[data-field=name]', row).value.trim(),
-          icon: $('[data-field=icon]', row).value.trim(),
-          logo: $('[data-field=logo]', row).value.trim(),
-        };
-      });
-      await api('/api/admin/settings', {
-        method: 'PUT',
-        body: JSON.stringify({
-          name: config.site.name,
-          pageTitle: config.site.pageTitle || config.site.name,
-          logo: config.site.logo || '',
-          favicon: config.site.favicon || '/assets/favicon.svg',
-          supportUrl: config.site.supportUrl || '',
-          sidebarLabel: config.site.sidebarLabel || 'Documentation',
-          spaces,
-        }),
-      });
+}
+
+async function navigationList(root, isSpace) {
+  const endpoint = isSpace ? '/api/admin/spaces' : '/api/admin/header-links';
+  const idKey = isSpace ? 'slug' : 'id';
+  const create = can(isSpace ? 'spaces.create' : 'header_links.create_edit');
+  const edit = can(isSpace ? 'spaces.edit' : 'header_links.create_edit');
+  const remove = can(isSpace ? 'spaces.delete' : 'header_links.delete');
+  let items = isSpace ? state.config.spaces : (await api(endpoint)).links;
+  const heading = isSpace ? t('Espacios','Spaces') : t('Enlaces del encabezado','Header Links');
+  const description = isSpace ? t('Cada espacio tiene su propia ruta, navegación y marca.', 'Each space has its own route, navigation, and brand.') : t('Añade hasta cinco enlaces internos o externos al encabezado.', 'Add up to five internal or external links to the header.');
+  const addLabel = isSpace ? t('Añadir espacio','Add space') : t('Añadir enlace','Add link');
+  root.innerHTML = `<section class="admin-section navigation-admin"><div class="section-heading"><div><h2>${heading}</h2><p>${description}</p></div><div class="navigation-actions"><span class="header-link-count" data-count></span>${create ? `<button type="button" class="primary-button" data-add><i class="fa-solid fa-plus"></i> ${addLabel}</button>` : ''}</div></div><div class="navigation-rows" id="${isSpace ? 'spaceRows' : 'headerLinkRows'}"></div></section>`;
+  const rows = $('.navigation-rows', root), add = $('[data-add]',root);
+  function draw() {
+    $('[data-count]', root).textContent = isSpace ? items.length : `${items.length}/5`;
+    if (add) add.disabled = items.length >= (isSpace ? 100 : 5);
+    rows.innerHTML = items.map(item => {
+      const id = item[idKey], title = navigationTitle(item);
+      const mark = isSpace ? spaceMarkMarkup(item) : (item.icon ? pageIconMarkup(item.icon) : '');
+      return `<div class="navigation-row" data-id="${esc(id)}">${edit ? `<button class="navigation-drag" type="button" draggable="true" aria-label="${t('Reordenar','Reorder')} ${esc(title)}" title="${t('Arrastra o usa las flechas arriba y abajo','Drag or use the up and down arrows')}"><i class="fa-solid fa-grip-vertical"></i></button>` : ''}${mark}<div class="navigation-row-copy"><strong>${esc(title)}</strong><small>${esc(isSpace ? (id === 'main' ? '/' : '/' + id) : item.url)}</small></div>${edit ? `<button type="button" class="secondary-button" data-edit aria-label="${t('Editar','Edit')} ${esc(title)}"><i class="fa-solid fa-pen"></i></button>` : ''}${remove ? `<button type="button" class="danger-button" data-delete aria-label="${t('Eliminar','Delete')} ${esc(title)}" ${isSpace && id === 'main' ? 'disabled' : ''}><i class="fa-solid fa-trash"></i></button>` : ''}</div>`;
+    }).join('') || `<p>${t('Todavía no hay enlaces.', 'There are no links yet.')}</p>`;
+  }
+  async function refresh(result) {
+    if (isSpace) {
       state.config = await api('/api/config');
+      items = state.config.spaces;
       renderSpaces();
-      updateBrand();
-      await notify({ icon: 'success', title: t('Espacios guardados', 'Documentation spaces saved'), confirmButtonText: t('Entendido', 'Got it') });
-    } catch (error) {
-      showError($('#adminPanel'), error);
+    } else {
+      state.config.headerLinks = items = result.links;
+      renderHeaderLinks();
     }
+    draw();
+  }
+  const open = item => navigationItemModal(isSpace, item, async payload => {
+    const response = await api(item ? endpoint + '/' + encodeURIComponent(item[idKey]) : endpoint, {
+      method: item ? 'PUT' : 'POST', body: JSON.stringify(payload),
+    });
+    if (isSpace && item?.slug === state.space) state.space = payload.slug;
+    await refresh(response);
+  });
+  if (add) add.onclick = () => open();
+  rows.onclick = async event => {
+    const row = event.target.closest('[data-id]');
+    if (!row) return;
+    const item = items.find(entry => entry[idKey] === row.dataset.id);
+    if (event.target.closest('[data-edit]')) return open(item);
+    if (!event.target.closest('[data-delete]')) return;
+    const answer = await Swal.fire({
+      icon: 'warning', title: isSpace ? t('¿Eliminar el espacio y sus páginas?', 'Delete this space and its pages?') : t('¿Eliminar este enlace?', 'Delete this link?'),
+      text: navigationTitle(item), showCancelButton: true, reverseButtons: true,
+      cancelButtonText: t('Cancelar','Cancel'), confirmButtonText: t('Eliminar','Delete'),
+    });
+    if (!answer.isConfirmed) return;
+    try { await refresh(await api(endpoint + '/' + encodeURIComponent(item[idKey]), { method:'DELETE' })); }
+    catch (error) { showError(root, error); }
   };
+  let dragged = null, saving = false;
+  async function move(ids) {
+    if (saving || ids.every((id,index) => id === items[index][idKey])) return;
+    saving = true;
+    try { await refresh(await api(endpoint + '/order', { method: 'PATCH', body: JSON.stringify({ ids }) })); }
+    catch (error) { showError(root, error); }
+    finally { saving = false; }
+  }
+  rows.ondragstart = event => {
+    if (!event.target.closest('.navigation-drag')) return event.preventDefault();
+    dragged = event.target.closest('[data-id]').dataset.id;
+    event.dataTransfer.setData('text/plain', dragged);
+    event.dataTransfer.effectAllowed = 'move';
+  };
+  rows.ondragend = () => { dragged = null; };
+  rows.ondragover = event => { if (dragged) event.preventDefault(); };
+  rows.ondrop = event => {
+    const row = event.target.closest('[data-id]');
+    if (!dragged || !row || row.dataset.id === dragged) return;
+    event.preventDefault();
+    const ids = items.map(item => item[idKey]).filter(id => id !== dragged);
+    const box = row.getBoundingClientRect();
+    ids.splice(ids.indexOf(row.dataset.id) + Number(event.clientY >= box.top + box.height / 2), 0, dragged);
+    move(ids);
+  };
+  rows.onkeydown = async event => {
+    if (!event.target.closest('.navigation-drag') || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    event.preventDefault();
+    const id = event.target.closest('[data-id]').dataset.id, ids = items.map(item => item[idKey]);
+    const index = ids.indexOf(id), target = index + (event.key === 'ArrowUp' ? -1 : 1);
+    if (target < 0 || target >= ids.length) return;
+    ids.splice(target, 0, ids.splice(index, 1)[0]);
+    await move(ids);
+    rows.querySelector(`[data-id="${CSS.escape(id)}"] .navigation-drag`)?.focus();
+  };
+  draw();
+}
+
+function spacesTab(root) {
+  return navigationList(root, true);
 }
 
 function languageRow(item, isNew) {
@@ -3111,7 +3471,7 @@ function registeredUserRow(user, roles) {
   const primary = Boolean(user.isPrimaryAdmin),
     role = roles.find((item) => item.roleKey === user.role),
     verified = Boolean(user.verified_at);
-  return `<div class="user-row"><div class="user-identity"><div class="user-heading"><strong>${esc(user.username)}</strong><span class="role-badge" style="--role-color:${esc(role?.color || '#64748b')}">${esc(role?.name || user.role)}</span></div><div class="sidebar-version">${esc(user.email)}</div></div><span class="user-verification-badge ${verified ? 'is-verified' : 'is-pending'}">${verified ? t('Verificado', 'Verified') : t('Pendiente', 'Pending')}</span>${can('users.role') ? `<select class="settings-input role-select" data-id="${user.id}" ${primary || !verified ? 'disabled' : ''}>${roles.map((item) => `<option value="${esc(item.roleKey)}" ${item.roleKey === user.role ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select>` : ''}${can('users.reset_password') ? `<button type="button" class="secondary-button reset-user-password" data-id="${user.id}" title="${t('Restablecer contraseña', 'Reset password')}" ${primary ? 'disabled' : ''}><i class="fa-solid fa-key"></i></button>` : ''}${can('users.delete') ? `<button type="button" class="danger-button delete-user" data-id="${user.id}" title="${t('Eliminar cuenta', 'Delete account')}" ${primary ? 'disabled' : ''}><i class="fa-solid fa-trash"></i></button>` : ''}</div>`;
+  return `<div class="user-row"><div class="user-identity"><div class="user-avatar-cell">${userAvatarMarkup(user.avatar,user.username)}</div><div class="user-heading"><strong>${esc(user.username)}</strong><span class="role-badge" style="--role-color:${esc(role?.color || '#64748b')}">${esc(role?.name || user.role)}</span></div><div class="sidebar-version">${esc(user.email)}</div></div><span class="user-verification-badge ${verified ? 'is-verified' : 'is-pending'}">${verified ? t('Verificado', 'Verified') : t('Pendiente', 'Pending')}</span>${can('users.role') ? `<select class="settings-input role-select" data-id="${user.id}" ${primary || !verified ? 'disabled' : ''}>${roles.map((item) => `<option value="${esc(item.roleKey)}" ${item.roleKey === user.role ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select>` : ''}${can('users.reset_password') ? `<button type="button" class="secondary-button reset-user-password" data-id="${user.id}" title="${t('Restablecer contraseña', 'Reset password')}" ${primary ? 'disabled' : ''}><i class="fa-solid fa-key"></i></button>` : ''}${can('users.delete') ? `<button type="button" class="danger-button delete-user" data-id="${user.id}" title="${t('Eliminar cuenta', 'Delete account')}" ${primary ? 'disabled' : ''}><i class="fa-solid fa-trash"></i></button>` : ''}</div>`;
 }
 async function usersTab(root) {
   const enabled = Boolean(state.config.registrationEnabled),
@@ -3361,6 +3721,8 @@ async function logsTab(root) {
     'media.uploaded': ['Se subió un archivo', 'Uploaded a file'],
     'admin.change': ['Se realizó un cambio administrativo', 'Completed an administrative change'],
   };
+  actionNames['connection.updated'] = ['Configuró una conexión OAuth', 'Configured an OAuth connection'];
+  actionNames['connection.deleted'] = ['Eliminó una conexión OAuth', 'Deleted an OAuth connection'];
   const formatAction = (log) => {
     const label = actionNames[log.actionKey] || actionNames['admin.change'];
     if (log.actionKey === 'captcha.enabled')
@@ -3397,7 +3759,7 @@ async function logsTab(root) {
           const date = new Date(log.occurredAt),
             formattedDate = Number.isNaN(date.getTime())
               ? t('Fecha no disponible', 'Date unavailable')
-              : new Intl.DateTimeFormat(state.lang, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+              : new Intl.DateTimeFormat(state.lang, { dateStyle: 'medium', timeStyle: 'short', timeZone: state.config.site.timeZone }).format(date);
           return `<tr><td>${Number(log.id)}</td><td><time datetime="${esc(log.occurredAt)}">${esc(formattedDate)}</time></td><td>${esc(log.username)}</td><td>${formatAction(log)}</td></tr>`;
         }).join('')
       : `<tr><td class="audit-log-empty" colspan="4">${t('No hay registros para mostrar.', 'No log entries to display.')}</td></tr>`;
@@ -3579,7 +3941,7 @@ const ROLE_PERMISSION_GROUPS = [
     'roles',
     'Roles',
     'Roles',
-    [['roles.manage', 'Crear, editar y eliminar roles', 'Create, edit, and delete roles']],
+    [['roles.manage', 'Crear, editar y eliminar roles', 'Create, edit, and delete roles'], ['connections.manage', 'Configurar conexiones OAuth', 'Configure OAuth connections']],
   ],
   [
     'captcha',
@@ -3616,143 +3978,8 @@ const ROLE_PERMISSION_GROUPS = [
     [['themes.manage', 'Instalar y administrar temas', 'Install and manage themes']],
   ],
 ];
-async function headerLinksTab(root) {
-  const canEdit = can('header_links.create_edit'),
-    canDelete = can('header_links.delete'),
-    result = await api('/api/admin/header-links');
-  let links = Array.isArray(result.links) ? result.links : [],
-    editingId = null,
-    titles = {};
-  root.innerHTML = `<section class="admin-section header-links-admin"><div class="section-heading"><div><h2>${t('Enlaces del encabezado', 'Header Links')}</h2><p>${t('Añade hasta cinco enlaces internos o externos. Los títulos se pueden traducir por idioma.', 'Add up to five internal or external links. Titles can be translated per language.')}</p></div><span class="header-link-count" id="headerLinkCount"></span></div><div class="header-link-list" id="headerLinkRows"></div></section>${canEdit ? `<section class="admin-section header-link-editor"><h2 id="headerLinkFormHeading">${t('Añadir enlace', 'Add link')}</h2><form id="headerLinkForm"><div class="header-link-form-grid"><label><span class="admin-label">${t('Idioma del título', 'Title language')}</span><select class="settings-input" id="headerLinkLanguage">${state.config.languages.map(code => `<option value="${esc(code)}">${esc(code)}</option>`).join('')}</select></label><label><span class="admin-label">${t('Título', 'Title')}</span><input class="settings-input" id="headerLinkTitle" maxlength="80" required></label><label class="header-link-url-field"><span class="admin-label">${t('URL', 'URL')}</span><input class="settings-input" id="headerLinkUrl" type="text" maxlength="2048" required placeholder="/ruta o https://ejemplo.com"></label><label class="header-link-external"><input id="headerLinkExternal" type="checkbox"><span>${t('Enlace externo', 'External link')}</span></label></div><div class="form-message auth-error" hidden></div><div class="header-link-actions"><button class="primary-button" id="saveHeaderLink" type="submit"><i class="fa-solid fa-plus"></i> ${t('Añadir enlace', 'Add link')}</button><button class="secondary-button" id="cancelHeaderLink" type="button" hidden>${t('Cancelar', 'Cancel')}</button></div></form></section>` : ''}`;
-  const rows = $('#headerLinkRows', root);
-  const renderRows = () => {
-    $('#headerLinkCount', root).textContent = `${links.length}/5`;
-    rows.innerHTML = links.length
-      ? links
-          .map((link) => {
-            const title =
-              link.titles?.[state.lang] ||
-              link.titles?.[state.lang.split('-')[0]] ||
-              Object.values(link.titles || {}).find(Boolean) ||
-              link.url;
-            return `<div class="header-link-row"><div class="header-link-row-main"><strong>${esc(title)}</strong><span>${esc(link.url)}</span><small>${link.external ? t('Externo', 'External') : t('Interno', 'Internal')}</small></div>${canEdit ? `<button type="button" class="secondary-button edit-header-link" data-id="${esc(link.id)}"><i class="fa-solid fa-pen"></i> ${t('Editar', 'Edit')}</button>` : ''}${canDelete ? `<button type="button" class="danger-button delete-header-link" data-id="${esc(link.id)}" aria-label="${t('Eliminar enlace', 'Delete link')}"><i class="fa-solid fa-trash"></i></button>` : ''}</div>`;
-          })
-          .join('')
-      : `<p class="header-links-empty">${t('Todavía no hay enlaces en el encabezado.', 'There are no header links yet.')}</p>`;
-  };
-  renderRows();
-  if (!canEdit) {
-    rows.onclick = async (event) => {
-      const remove = event.target.closest('.delete-header-link');
-      if (!remove) return;
-      const answer = await Swal.fire({
-        icon: 'warning',
-        title: t('¿Eliminar este enlace?', 'Delete this link?'),
-        showCancelButton: true,
-        confirmButtonText: t('Eliminar', 'Delete'),
-        cancelButtonText: t('Cancelar', 'Cancel'),
-        reverseButtons: true,
-      });
-      if (!answer.isConfirmed) return;
-      try {
-        const updated = await api(`/api/admin/header-links/${encodeURIComponent(remove.dataset.id)}`, { method: 'DELETE' });
-        links = updated.links;
-        renderRows();
-      } catch (error) {
-        showError($('#adminPanel'), error);
-      }
-    };
-    return;
-  }
-  const form = $('#headerLinkForm', root),
-    language = $('#headerLinkLanguage', form),
-    titleInput = $('#headerLinkTitle', form),
-    urlInput = $('#headerLinkUrl', form),
-    externalInput = $('#headerLinkExternal', form),
-    syncTitle = () => {
-      titleInput.value = titles[language.value] || '';
-    },
-    resetForm = () => {
-      editingId = null;
-      titles = {};
-      form.reset();
-      language.value = state.config.languages[0] || 'en';
-      titleLanguage = language.value;
-      syncTitle();
-      $('#headerLinkFormHeading', root).textContent = t('Añadir enlace', 'Add link');
-      $('#saveHeaderLink', root).innerHTML = `<i class="fa-solid fa-plus"></i> ${t('Añadir enlace', 'Add link')}`;
-      $('#cancelHeaderLink', root).hidden = true;
-      $('.form-message', form).hidden = true;
-    };
-  let titleLanguage = language.value;
-  language.onchange = () => {
-    titles[titleLanguage] = titleInput.value;
-    titleLanguage = language.value;
-    syncTitle();
-  };
-  titleInput.oninput = () => {
-    titles[language.value] = titleInput.value;
-  };
-  $('#cancelHeaderLink', root).onclick = resetForm;
-  rows.onclick = async (event) => {
-    const edit = event.target.closest('.edit-header-link'),
-      remove = event.target.closest('.delete-header-link');
-    if (edit) {
-      const link = links.find((item) => item.id === edit.dataset.id);
-      if (!link) return;
-      editingId = link.id;
-      titles = { ...link.titles };
-      language.value = Object.keys(titles).find((code) => state.config.languages.includes(code)) || state.config.languages[0];
-      titleLanguage = language.value;
-      syncTitle();
-      urlInput.value = link.url;
-      externalInput.checked = link.external;
-      $('#headerLinkFormHeading', root).textContent = t('Editar enlace', 'Edit link');
-      $('#saveHeaderLink', root).innerHTML = `<i class="fa-solid fa-floppy-disk"></i> ${t('Guardar cambios', 'Save changes')}`;
-      $('#cancelHeaderLink', root).hidden = false;
-      form.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      titleInput.focus();
-      return;
-    }
-    if (!remove) return;
-    const answer = await Swal.fire({
-      icon: 'warning',
-      title: t('¿Eliminar este enlace?', 'Delete this link?'),
-      showCancelButton: true,
-      confirmButtonText: t('Eliminar', 'Delete'),
-      cancelButtonText: t('Cancelar', 'Cancel'),
-      reverseButtons: true,
-    });
-    if (!answer.isConfirmed) return;
-    try {
-      const updated = await api(`/api/admin/header-links/${encodeURIComponent(remove.dataset.id)}`, { method: 'DELETE' });
-      links = updated.links;
-      if (editingId === remove.dataset.id) resetForm();
-      renderRows();
-    } catch (error) {
-      showError($('#adminPanel'), error);
-    }
-  };
-  form.onsubmit = async (event) => {
-    event.preventDefault();
-    titles[language.value] = titleInput.value;
-    const payload = {
-      titles: Object.fromEntries(Object.entries(titles).filter(([, value]) => value.trim())),
-      url: urlInput.value,
-      external: externalInput.checked,
-    };
-    try {
-      const saved = await api(
-        editingId ? `/api/admin/header-links/${encodeURIComponent(editingId)}` : '/api/admin/header-links',
-        { method: editingId ? 'PUT' : 'POST', body: JSON.stringify(payload) },
-      );
-      links = saved.links;
-      renderRows();
-      resetForm();
-    } catch (error) {
-      showError(form, error);
-    }
-  };
+function headerLinksTab(root) {
+  return navigationList(root, false);
 }
 function roleEditorRow(role, expanded = false) {
   const permissions = Array.isArray(role.permissions) ? role.permissions.filter((permission) => rolePermissionKeys.includes(permission)) : [],
@@ -3796,7 +4023,7 @@ function roleEditorRow(role, expanded = false) {
     logs: t('Consulta el historial de cambios administrativos.', 'Review administrative change history.'),
     themes: t('Instala, activa, configura y elimina temas de la wiki.', 'Install, activate, configure, and remove wiki themes.'),
   };
-  return `<article class="role-editor-card" data-role-key="${rowId}" data-system="${system}"><div class="role-line"><div class="role-line-identity"><span class="role-badge role-line-badge" style="--role-color:${esc(color)}">${name}</span>${system ? `<span class="role-system-lock"><i class="fa-solid fa-lock"></i> ${t('Rol del sistema', 'System role')}</span>` : ''}</div><div class="role-line-actions"><button type="button" class="secondary-button edit-role" aria-expanded="${expanded}"><i class="fa-solid fa-pen"></i> ${t('Editar', 'Edit')}</button>${system ? '' : `<button type="button" class="danger-button remove-role"><i class="fa-solid fa-trash"></i></button>`}</div></div><div class="role-edit-panel" ${expanded ? '' : 'hidden'}><div class="role-editor-fields"><label><span class="admin-label">${t('Nombre del rol', 'Role name')}</span><input class="settings-input" data-role-name maxlength="80" value="${esc(role.name || '')}" ${system ? 'readonly' : ''}></label><label><span class="admin-label">${t('Color del badge', 'Badge color')}</span><input type="color" data-role-color value="${esc(color)}" ${system ? 'disabled' : ''}></label><span class="role-badge role-preview" style="--role-color:${esc(color)}">${name}</span></div><label class="role-permission-all"><input type="checkbox" data-permission-all ${permissions.length === rolePermissionKeys.length ? 'checked' : ''} ${system ? 'disabled' : ''}><strong>${t('Todos los permisos', 'All permissions')}</strong></label><label class="role-permission-admin-view"><input type="checkbox" data-permission="admin.view" ${permissions.includes('admin.view') ? 'checked' : ''} ${system ? 'disabled' : ''}><span><strong>${t('Ver panel de administrador', 'View administrator panel')}</strong><small>${t('Mostrar el engranaje y permitir el acceso al panel.', 'Show the gear and allow access to the admin panel.')}</small></span></label><div class="role-permissions">${ROLE_PERMISSION_GROUPS.map(
+  return `<article class="role-editor-card" data-role-key="${rowId}" data-system="${system}"><div class="role-line"><div class="role-line-identity"><span class="role-badge role-line-badge" style="--role-color:${esc(color)}">${name}</span>${system ? `<span class="role-system-lock"><i class="fa-solid fa-lock"></i> ${t('Rol del sistema', 'System role')}</span>` : ''}</div><div class="role-line-actions"><button type="button" class="secondary-button edit-role" aria-expanded="${expanded}"><i class="fa-solid fa-pen"></i> ${t('Editar', 'Edit')}</button>${system ? '' : `<button type="button" class="danger-button remove-role"><i class="fa-solid fa-trash"></i></button>`}</div></div><div class="role-edit-panel" ${expanded ? '' : 'hidden'}><div class="role-editor-fields"><label><span class="admin-label">${t('Nombre del rol', 'Role name')}</span><input class="settings-input" data-role-name maxlength="80" value="${esc(role.name || '')}"></label><label><span class="admin-label">${t('Color del badge', 'Badge color')}</span><input type="color" data-role-color value="${esc(color)}"></label><span class="role-badge role-preview" style="--role-color:${esc(color)}">${name}</span></div><label class="role-permission-all"><input type="checkbox" data-permission-all ${permissions.length === rolePermissionKeys.length ? 'checked' : ''} ${system ? 'disabled' : ''}><strong>${t('Todos los permisos', 'All permissions')}</strong></label><label class="role-permission-admin-view"><input type="checkbox" data-permission="admin.view" ${permissions.includes('admin.view') ? 'checked' : ''} ${system ? 'disabled' : ''}><span><strong>${t('Ver panel de administrador', 'View administrator panel')}</strong><small>${t('Mostrar el engranaje y permitir el acceso al panel.', 'Show the gear and allow access to the admin panel.')}</small></span></label><div class="role-permissions">${ROLE_PERMISSION_GROUPS.map(
     ([key, es, en, items]) => {
       const checked = items.every(([permission]) => permissions.includes(permission));
       return `<fieldset class="role-permission-group"><legend><label><input type="checkbox" data-permission-group="${key}" ${checked ? 'checked' : ''} ${system ? 'disabled' : ''}> ${t(es, en)}</label></legend><p class="role-permission-description">${descriptions[key] || ''}</p>${items.map(([permission, labelEn, labelEs]) => `<label class="role-permission-item"><input type="checkbox" data-permission="${permission}" ${permissions.includes(permission) ? 'checked' : ''} ${system ? 'disabled' : ''}><span>${t(labelEn, labelEs)}</span></label>`).join('')}</fieldset>`;
@@ -3953,7 +4180,7 @@ async function captchaTab(root) {
       'Protege el inicio de sesión, registro y formularios de contraseña con verificación en el servidor.',
       'Protect sign-in, registration, and password forms with server-side verification.',
     ) +
-    '</p><label class="captcha-enable"><input id="captchaEnabled" type="checkbox" ' +
+    '</p><label class="admin-switch-row"><input id="captchaEnabled" type="checkbox" role="switch" ' +
     (cfg.enabled ? 'checked' : '') +
     '> ' +
     t('Habilitar Captcha', 'Enable Captcha') +
@@ -3979,7 +4206,7 @@ async function captchaTab(root) {
     Number(cfg.minScore || 0.5) +
     '"></label><label class="captcha-clear-secret"><input id="captchaClearSecret" type="checkbox"> ' +
     t('Eliminar la clave secreta guardada', 'Clear saved secret key') +
-    '</label></div><div class="admin-actions"><button class="primary-button" id="saveCaptcha">' +
+    '</label></div><div class="captcha-save-actions"><button class="primary-button" id="saveCaptcha">' +
     t('Guardar configuración', 'Save configuration') +
     '</button></div></section>';
   const captchaGrid = $('.captcha-config-grid', root),
@@ -3990,10 +4217,15 @@ async function captchaTab(root) {
     $('#captchaScoreWrap', root));
   captchaKeyFields.append($('#captchaSiteKey', root).closest('label'), $('#captchaSecret', root).closest('label'),
     $('.captcha-clear-secret', root));
-  captchaGrid.replaceWith(
-    settingsGroup(t('Proveedor y tipo', 'Provider and type'), captchaProviderFields),
-    settingsGroup(t('Claves', 'Keys'), captchaKeyFields),
-  );
+  const providerGroup = settingsGroup(t('Proveedor y tipo', 'Provider and type'), captchaProviderFields),
+    keyGroup = settingsGroup(t('Claves', 'Keys'), captchaKeyFields),
+    enabled = $('#captchaEnabled', root);
+  captchaGrid.replaceWith(providerGroup, keyGroup);
+  const refreshVisibility = () => {
+    providerGroup.hidden = keyGroup.hidden = !enabled.checked;
+  };
+  enabled.onchange = refreshVisibility;
+  refreshVisibility();
   const provider = $('#captchaProvider', root),
     variant = $('#captchaVariant', root),
     scoreWrap = $('#captchaScoreWrap', root);
@@ -4048,7 +4280,7 @@ async function captchaTab(root) {
 async function smtpTab(root) {
   const response = await api('/api/admin/smtp'),
     smtp = response.smtp;
-  root.innerHTML = `<section class="admin-section smtp-settings"><h2>${t('Configuración del correo SMTP', 'SMTP email settings')}</h2><p>${t('Completa los datos del servidor y envía un correo de prueba. Los cambios solo se guardarán después de confirmar que el mensaje llegó.', 'Enter the mail server details and send a test email. Settings can only be saved after the message is confirmed sent.')}</p><div class="smtp-fields"><label><span class="admin-label">SMTP Host</span><input class="settings-input" id="smtpHost" maxlength="255" required value="${esc(smtp.host)}" placeholder="smtp.example.com"></label><label><span class="admin-label">${t('Puerto', 'Port')}</span><input class="settings-input" id="smtpPort" type="number" min="1" max="65535" value="${Number(smtp.port) || 587}" required></label><label><span class="admin-label">${t('Usuario SMTP', 'SMTP username')}</span><input class="settings-input" id="smtpUser" maxlength="255" autocomplete="off" value="${esc(smtp.user)}"></label><label><span class="admin-label">${t('Correo remitente', 'Sender email')}</span><input class="settings-input" id="smtpFrom" maxlength="254" type="text" required value="${esc(smtp.from)}" placeholder="Teralth Wiki <wiki@example.com>"></label></div><label class="category-open-default smtp-secure-toggle"><input id="smtpSecure" type="checkbox" ${smtp.secure ? 'checked' : ''}> ${t('Conexión TLS segura', 'Secure TLS connection')}</label><div class="smtp-password-row"><span>${smtp.passwordConfigured ? t('La contraseña SMTP está guardada.', 'SMTP password is saved.') : t('No hay una contraseña SMTP guardada.', 'No SMTP password is saved.')}</span><button type="button" class="secondary-button" id="toggleSmtpPassword">${t('Cambiar contraseña SMTP', 'Change SMTP password')}</button></div><div class="field smtp-password-field" id="smtpPasswordWrap" hidden><label for="smtpPassword">${t('Nueva contraseña SMTP', 'New SMTP password')}</label><input class="settings-input" id="smtpPassword" type="password" autocomplete="new-password" maxlength="1024"></div><div class="smtp-test-email-control"><button type="button" class="secondary-button" id="toggleTestEmail"><i class="fa-solid fa-envelope"></i> ${t('Ingresar correo de prueba', 'Enter test email')}</button><div class="field" id="smtpTestEmailWrap" hidden><label for="smtpTestEmail">${t('Correo de prueba (obligatorio)', 'Test email (required)')}</label><input class="settings-input" id="smtpTestEmail" type="email" required autocomplete="email" value="" placeholder="you@example.com"></div></div><div class="smtp-actions"><button type="button" class="secondary-button" id="testSmtp"><i class="fa-solid fa-paper-plane"></i> ${t('Enviar correo de prueba', 'Send test email')}</button><button type="button" class="primary-button" id="saveSmtp" disabled><i class="fa-solid fa-floppy-disk"></i> ${t('Guardar configuración SMTP', 'Save SMTP settings')}</button></div><div class="form-message auth-error" id="smtpError" hidden></div></section>`;
+  root.innerHTML = `<section class="admin-section smtp-settings"><h2>${t('Configuración del correo SMTP', 'SMTP email settings')}</h2><p>${t('Completa los datos del servidor y envía un correo de prueba. Los cambios solo se guardarán después de confirmar que el mensaje llegó.', 'Enter the mail server details and send a test email. Settings can only be saved after the message is confirmed sent.')}</p><div class="smtp-fields"><label><span class="admin-label">SMTP Host</span><input class="settings-input" id="smtpHost" maxlength="255" required value="${esc(smtp.host)}" placeholder="smtp.example.com"></label><label><span class="admin-label">${t('Puerto', 'Port')}</span><input class="settings-input" id="smtpPort" type="number" min="1" max="65535" value="${Number(smtp.port) || 587}" required></label><label><span class="admin-label">${t('Usuario SMTP', 'SMTP username')}</span><input class="settings-input" id="smtpUser" maxlength="255" autocomplete="off" value="${esc(smtp.user)}"></label><label><span class="admin-label">${t('Correo remitente', 'Sender email')}</span><input class="settings-input" id="smtpFrom" maxlength="254" type="text" required value="${esc(smtp.from)}" placeholder="Teralth Wiki <wiki@example.com>"></label></div><label class="smtp-secure-toggle admin-switch-row"><input id="smtpSecure" role="switch" type="checkbox" ${smtp.secure ? 'checked' : ''}> ${t('Conexión TLS segura', 'Secure TLS connection')}</label><div class="smtp-password-row"><span>${smtp.passwordConfigured ? t('La contraseña SMTP está guardada.', 'SMTP password is saved.') : t('No hay una contraseña SMTP guardada.', 'No SMTP password is saved.')}</span><button type="button" class="secondary-button" id="toggleSmtpPassword">${t('Cambiar contraseña SMTP', 'Change SMTP password')}</button></div><div class="field smtp-password-field" id="smtpPasswordWrap" hidden><label for="smtpPassword">${t('Nueva contraseña SMTP', 'New SMTP password')}</label><input class="settings-input" id="smtpPassword" type="password" autocomplete="new-password" maxlength="1024"></div><div class="smtp-test-email-control"><button type="button" class="secondary-button" id="toggleTestEmail"><i class="fa-solid fa-envelope"></i> ${t('Ingresar correo de prueba', 'Enter test email')}</button><div class="field" id="smtpTestEmailWrap" hidden><label for="smtpTestEmail">${t('Correo de prueba (obligatorio)', 'Test email (required)')}</label><input class="settings-input" id="smtpTestEmail" type="email" required autocomplete="email" value="" placeholder="you@example.com"></div></div><div class="smtp-actions"><button type="button" class="secondary-button" id="testSmtp"><i class="fa-solid fa-paper-plane"></i> ${t('Enviar correo de prueba', 'Send test email')}</button><button type="button" class="primary-button" id="saveSmtp" disabled><i class="fa-solid fa-floppy-disk"></i> ${t('Guardar configuración SMTP', 'Save SMTP settings')}</button></div><div class="form-message auth-error" id="smtpError" hidden></div></section>`;
   const smtpSection = $('.smtp-settings', root),
     smtpFields = $('.smtp-fields', root),
     smtpSecurity = settingsGroup(t('Seguridad y credenciales', 'Security and credentials'),
@@ -4059,6 +4291,12 @@ async function smtpTab(root) {
   smtpFields.replaceWith(smtpServer);
   smtpServer.append(smtpFields);
   smtpSection.append(smtpSecurity, smtpTest);
+  smtpServer.insertAdjacentHTML('beforebegin', `<label class="admin-switch-row"><input id="smtpEnabled" type="checkbox" role="switch" ${smtp.enabled !== false && smtp.host ? 'checked' : ''}> ${t('Activar SMTP', 'Enable SMTP')}</label>`);
+  const enabled = $('#smtpEnabled', root), save = $('#saveSmtp', root);
+  const saveActions = document.createElement('div');
+  saveActions.className = 'smtp-save-actions';
+  saveActions.append(save);
+  smtpSection.append(saveActions);
   let proof = '';
   const getValues = () => ({
     host: $('#smtpHost', root).value.trim(),
@@ -4071,8 +4309,10 @@ async function smtpTab(root) {
   });
   const invalidate = () => {
     proof = '';
-    $('#saveSmtp', root).disabled = true;
+    save.disabled = enabled.checked;
+    for (const group of [smtpServer, smtpSecurity, smtpTest]) group.hidden = !enabled.checked;
   };
+  invalidate();
   $('#toggleSmtpPassword', root).onclick = () => {
     $('#smtpPasswordWrap', root).hidden = !$('#smtpPasswordWrap', root).hidden;
   };
@@ -4110,8 +4350,8 @@ async function smtpTab(root) {
   };
   $('#saveSmtp', root).onclick = async () => {
     try {
-      if (!proof) throw validationError(t('Primero envía el correo de prueba.', 'Send the test email first.'));
-      await api('/api/admin/smtp', { method: 'PUT', body: JSON.stringify({ ...getValues(), proof }) });
+      if (enabled.checked && !proof) throw validationError(t('Primero envía el correo de prueba.', 'Send the test email first.'));
+      await api('/api/admin/smtp', { method: 'PUT', body: JSON.stringify(enabled.checked ? { ...getValues(), proof } : { enabled: false }) });
       proof = '';
       await notify({
         icon: 'success',
@@ -4189,33 +4429,16 @@ async function reverseProxyTab(root) {
 }
 
 async function changeAdminSpace(nextSpace, tab, root) {
-  const requestId = (state.adminSpaceRequest || 0) + 1;
-  state.adminSpaceRequest = requestId;
   state.space = nextSpace;
-  history.replaceState({}, '', adminUrl(tab, nextSpace));
   renderSpaces();
-  state.pages = [];
-  state.categories = [];
-  state.homePageSlug = null;
-  if (tab === 'pages') renderPageRows(root);
-  try {
-    const result = await api('/api/pages', { headers: { 'X-Wiki-Space': nextSpace } });
-    if (state.adminSpaceRequest !== requestId || state.space !== nextSpace || !root.isConnected) return;
-    state.pages = Array.isArray(result.pages) ? result.pages : [];
-    state.categories = Array.isArray(result.categories) ? result.categories : [];
-    state.homePageSlug = result.homePageSlug || null;
-    renderNav();
-    await adminView(tab);
-  } catch (error) {
-    if (state.adminSpaceRequest === requestId && root.isConnected) showError($('#adminPanel'), error);
-  }
+  await adminView(tab, { replaceUrl: true });
 }
 async function pagesTab(root) {
   const spaces = state.config.spaces || [],
     options = spaces
       .map(
         (space) =>
-          `<option value="${esc(space.slug)}" ${space.slug === state.space ? 'selected' : ''}>${esc(space.name)} (${space.slug === 'main' ? '/' : '/' + space.slug})</option>`,
+          `<option value="${esc(space.slug)}" ${space.slug === state.space ? 'selected' : ''}>${esc(navigationTitle(space))} (${space.slug === 'main' ? '/' : '/' + space.slug})</option>`,
       )
       .join('');
   root.innerHTML = `<section class="admin-section workspace-selector-section"><div><h2>${t('Espacio de trabajo', 'Working space')}</h2><p>${t('Elige el espacio donde se crearán y editarán las páginas.', 'Choose the space where pages will be created and edited.')}</p></div><label class="workspace-select-label"><span class="admin-label">${t('Espacio de documentación', 'Documentation space')}</span><select class="settings-input" id="pagesSpaceSelect">${options}</select></label></section><section class="admin-section page-management-section"><div class="section-heading"><div><h2>${t('Páginas', 'Pages')}</h2><p>${t('Crea páginas de contenido o redirecciones dentro del espacio seleccionado. Arrastra el control de seis puntos para reordenar o cambiar de categoría.', 'Create content pages or redirects in the selected space. Drag the six-dot handle to reorder or change categories.')}</p></div><button class="primary-button" id="newPage"><i class="fa-solid fa-plus"></i> ${t('Crear una página', 'Create page')}</button></div><div id="pageRows" class="page-category-groups"></div></section><section class="admin-section page-editor-section" id="pageEditor" hidden></section>`;
@@ -4257,7 +4480,7 @@ function renderPageRows(root) {
       page.titles[state.lang.split('-')[0]] ||
       Object.values(page.titles)[0] ||
       page.slug;
-    return `<div class="page-row" draggable="false" data-page-id="${Number(page.id)}" data-slug="${esc(page.slug)}"><button type="button" class="drag-handle page-row-drag-handle" draggable="${canOrder ? 'true' : 'false'}" aria-label="${t('Arrastrar página', 'Drag page')}" title="${t('Arrastrar para ordenar o cambiar categoría', 'Drag to reorder or change category')}" ${canOrder ? '' : 'hidden'}><i class="fa-solid fa-grip-vertical"></i></button><div class="page-row-main">${pageIconMarkup(page.icon)}<div><strong>${esc(title)}</strong><div class="sidebar-version">${esc(navUrl(state.space, page.slug))}</div></div></div>${canHome ? `<button type="button" class="home-page-button ${state.homePageSlug === page.slug ? 'active' : ''}" data-slug="${esc(page.slug)}" title="${state.homePageSlug === page.slug ? t('Página de inicio', 'Home page') : t('Establecer como página de inicio', 'Set as home page')}" aria-label="${t('Establecer como página de inicio', 'Set as home page')}"><i class="fa-solid fa-house"></i></button>` : ''}${canEdit ? `<button class="secondary-button edit-page" data-slug="${esc(page.slug)}"><i class="fa-solid fa-pen"></i> ${t('Editar', 'Edit')}</button>` : ''}${canDelete ? `<button class="danger-button delete-page" data-slug="${esc(page.slug)}" aria-label="${t('Eliminar página', 'Delete page')}"><i class="fa-solid fa-trash"></i></button>` : ''}</div>`;
+    return `<div class="page-row" draggable="false" data-page-id="${Number(page.id)}" data-slug="${esc(page.slug)}"><button type="button" class="drag-handle page-row-drag-handle" draggable="${canOrder ? 'true' : 'false'}" aria-label="${t('Arrastrar página', 'Drag page')}" title="${t('Arrastrar para ordenar o cambiar categoría', 'Drag to reorder or change category')}" ${canOrder ? '' : 'hidden'}><i class="fa-solid fa-grip-vertical"></i></button><div class="page-row-main"><div class="page-row-title">${pageIconMarkup(page.icon)}<strong>${esc(title)}</strong>${page.publication_status === 'draft' ? `<span class="badge badge-subtle theme-warning draft-badge">${t('Borrador', 'Draft')}</span>` : ''}${Number(page.is_wip) ? '<span class="badge badge-outline theme-warning wip-badge">WIP</span>' : ''}</div></div>${canHome ? `<button type="button" class="home-page-button ${state.homePageSlug === page.slug ? 'active' : ''}" data-slug="${esc(page.slug)}" title="${state.homePageSlug === page.slug ? t('Página de inicio', 'Home page') : t('Establecer como página de inicio', 'Set as home page')}" aria-label="${t('Establecer como página de inicio', 'Set as home page')}"><i class="fa-solid fa-house"></i></button>` : ''}${canEdit ? `<button class="secondary-button edit-page" data-slug="${esc(page.slug)}"><i class="fa-solid fa-pen"></i> ${t('Editar', 'Edit')}</button>` : ''}${canDelete ? `<button class="danger-button delete-page" data-slug="${esc(page.slug)}" aria-label="${t('Eliminar página', 'Delete page')}"><i class="fa-solid fa-trash"></i></button>` : ''}</div>`;
   };
   const renderPageList = (categoryId, list) =>
     `<div class="page-list" data-drop-category="${categoryId === null ? '' : Number(categoryId)}">${list.length ? list.map(renderPage).join('') : `<div class="empty-drop-hint">${canOrder ? t('Arrastra páginas aquí', 'Drop pages here') : t('Sin páginas', 'No pages')}</div>`}</div>`;
@@ -4407,7 +4630,7 @@ async function openEditor(root, page) {
     const workspace = state.space;
     showLoading();
     try {
-      const result = await api('/api/pages/' + encodeURIComponent(page.slug));
+      const result = await api('/api/admin/pages/' + encodeURIComponent(page.slug));
       if (workspace !== state.space) return;
       page = { ...page, ...result.page };
     } catch (error) {
@@ -4423,23 +4646,53 @@ async function openEditor(root, page) {
   closeMobileNav();
   state.editPage = page;
   const langs = state.config.languages;
-  const first = page?.titles[state.lang] || Object.values(page?.titles || {})[0] || '';
-  const currentSlug = page?.slug || '',
-    pageIconIsImage = /^\/media\/[A-Za-z0-9_-]{16}\.(?:png|jpg|gif|webp)$/.test(page?.icon || '');
-  editor.innerHTML = `<h2 id="editorHeading">${page ? t('Editar página', 'Edit page') : t('Nueva página', 'New page')}${first ? ' — ' + esc(first) : ''}</h2><div class="editor-top"><input class="settings-input" id="editTitle" placeholder="${t('Título de la página', 'Page title')}" value="${esc(first)}"><label class="page-icon-mode-control"><span class="admin-label">${t('Tipo de marca', 'Brand type')}</span><select class="settings-input" id="editIconMode"><option value="icon" ${pageIconIsImage ? '' : 'selected'}>${t('Insertar un ícono', 'Insert an icon')}</option><option value="image" ${pageIconIsImage ? 'selected' : ''}>${t('Subir una imagen', 'Upload an image')}</option></select></label><label id="editIconWrap" class="page-icon-mode-control" ${pageIconIsImage ? 'hidden' : ''}><span class="admin-label">${t('Ícono Font Awesome', 'Font Awesome icon')}</span><input class="settings-input" id="editIcon" placeholder="fa-solid fa-book-open" value="${esc(pageIconIsImage ? 'fa-file-lines' : page?.icon || 'fa-file-lines')}"></label><label id="editIconImageWrap" class="page-icon-mode-control page-icon-image-control" ${pageIconIsImage ? '' : 'hidden'}><span class="admin-label">${t('Subir una imagen', 'Upload an image')}</span><input id="uploadPageIcon" type="file" accept="image/png,image/jpeg,image/gif,image/webp"><input id="editIconImagePath" type="hidden" value="${pageIconIsImage ? esc(page.icon) : ''}"><small id="pageIconStatus">${pageIconIsImage ? '<img class="category-image-preview" src="' + esc(page.icon) + '" alt="><a href="' + esc(page.icon) + '" target="_blank" rel="noopener noreferrer">' + esc(page.icon) + '</a>' : t('No hay imagen subida', 'No image uploaded')}</small></label><select class="settings-input editor-language" id="editLanguage">${langs.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}</select></div><div class="field page-type-field"><label for="editPageType">${t('Tipo de página', 'Page type')}</label><select class="settings-input" id="editPageType"><option value="content" ${page?.page_type !== 'redirect' ? 'selected' : ''}>${t('Página de contenido', 'Content page')}</option><option value="redirect" ${page?.page_type === 'redirect' ? 'selected' : ''}>${t('Página de redirección (URL)', 'Redirect page (URL)')}</option></select></div><div id="redirectPageFields" ${page?.page_type === 'redirect' ? '' : 'hidden'}><div class="field"><label for="redirectUrl">URL</label><input class="settings-input" id="redirectUrl" type="url" maxlength="2048" placeholder="https://example.com/docs" value="${esc(page?.redirect_url || '')}"></div></div><div id="contentPageFields" ${page?.page_type === 'redirect' ? 'hidden' : ''}><div class="admin-label" style="margin:8px 0">${t('Formato', 'Formatting')}</div><div class="editor-toolbar">${editorToolbarMarkup()}</div><div id="editContent" class="editor-content" contenteditable="true" aria-label="${t('Contenido de la página', 'Page content')}"></div><textarea class="editor-source" aria-label="${t('Contenido en formato de código', 'Source format')}" hidden spellcheck="false"></textarea><div class="field"><label>${t('Categoría', 'Category')}</label><select class="settings-input" id="editCategory"><option value="">${t('Sin categoría', 'No category')}</option>${state.categories.map((c) => `<option value="${c.id}" ${page?.category_id === c.id ? 'selected' : ''}>${esc(c.names[state.lang] || Object.values(c.names)[0])}</option>`).join('')}</select></div></div><div class="form-message auth-error" hidden></div><div style="display:flex;gap:8px;margin-top:14px"><button type="button" class="primary-button" id="savePage"><i class="fa-solid fa-floppy-disk"></i> ${t('Guardar cambios', 'Save changes')}</button><button class="secondary-button" id="cancelEditor">${t('Cancelar', 'Cancel')}</button></div>`;
-  const editorHeader = document.createElement('div');
-  editorHeader.className = 'editor-page-header';
-  const backButton = $('#cancelEditor', editor);
-  backButton.innerHTML = `<i class="fa-solid fa-arrow-left" aria-hidden="true"></i> ${t('Volver', 'Back')}`;
-  editorHeader.append(backButton, $('#editorHeading', editor));
-  editor.prepend(editorHeader);
-  $('#savePage', editor).parentElement.className = 'editor-page-actions';
+  const currentSlug = page?.slug || '';
+  const isRedirect = page?.page_type === 'redirect';
+  const languageName = (lang) => state.config.languageCatalog?.find(item => item.code === lang)?.name || new Intl.DisplayNames([lang], { type: 'language' }).of(lang);
+  editor.innerHTML = `
+    <div class="editor-page-header"><h2 id="editorHeading"></h2></div>
+    <div class="editor-field-grid">
+      <label><span class="admin-label">${t('Idioma', 'Language division')}</span><select class="settings-input" id="editLanguage">${langs.map(lang => `<option value="${esc(lang)}" ${lang === state.lang ? 'selected' : ''}>${esc(languageName(lang))}</option>`).join('')}</select></label>
+      <label><span class="admin-label">${t('Título de la página', 'Page title')}</span><input class="settings-input" id="editTitle" maxlength="150" required></label>
+      ${brandFields('editIcon', page?.icon)}
+      <label><span class="admin-label">${t('Tipo de página', 'Page type')}</span><select class="settings-input" id="editPageType" required>
+        <option value="content">${t('Página de contenido', 'Content page')}</option>
+        <option value="redirect" ${isRedirect ? 'selected' : ''}>${t('URL de redirección', 'Redirect URL')}</option></select></label>
+      <label><span class="admin-label">${t('Categoría', 'Category')}</span><select class="settings-input" id="editCategory" required>
+        ${!state.categories.length || (page && !page.category_id) ? `<option value="general">${t('General', 'General')}</option>` : '<option value=""></option>'}
+        ${state.categories.map(c => `<option value="${Number(c.id)}" ${Number(page?.category_id) === Number(c.id) ? 'selected' : ''}>${esc(c.names[state.lang] || Object.values(c.names)[0])}</option>`).join('')}</select></label>
+    </div>
+    <div id="redirectPageFields" ${isRedirect ? '' : 'hidden'}><label><span class="admin-label">${t('URL de redirección', 'Redirect URL')}</span><input class="settings-input" id="redirectUrl" maxlength="2048" placeholder="https://example.com/docs" value="${esc(page?.redirect_url || '')}" required></label></div>
+    <div id="contentPageFields" ${isRedirect ? 'hidden' : ''}>
+      <div class="page-publication-options"><label for="editTags" class="admin-label">Tags</label>
+        <div class="editor-tag-input"><input id="editTags" class="settings-input" maxlength="50"><button type="button" id="addPageTag" class="secondary-button">${t('Añadir', 'Add')}</button></div>
+        <div id="editTagChips"></div>
+        <label class="wip-control"><input type="checkbox" role="switch" id="editWip" ${Number(page?.is_wip) ? 'checked' : ''}> ${t('WIP (muestra un aviso de mantenimiento)', 'WIP (shows a maintenance notice)')}</label></div>
+      <div class="editor-toolbar">${editorToolbarMarkup()}</div><div id="editContent" class="editor-content" contenteditable="true" aria-label="${t('Contenido de la página', 'Page content')}"></div>
+      <textarea class="editor-source" aria-label="${t('Contenido en formato de código', 'Source format')}" hidden spellcheck="false"></textarea></div>
+    <div class="form-message auth-error" hidden></div><div class="editor-page-actions">
+      <button class="secondary-button" id="cancelEditor">${t('Cancelar', 'Cancel')}</button>
+      <button class="secondary-button" id="previewPage">${t('Vista previa', 'Preview')}</button>
+      <button class="secondary-button" id="saveDraft">${t('Guardar como borrador', 'Save as Draft')}</button>
+      <button class="primary-button" id="savePage">${t('Guardar y publicar', 'Save and Publish')}</button></div>`;
+  const brand = bindBrandFields(editor, 'editIcon', { onChange: () => { state.dirty = true; } });
+  let draftTags = Array.isArray(page?.tags) ? [...page.tags] : [], savingPage = false;
+  const paintTags = () => {
+    renderArticleTags($('#editPageType', editor).value === 'redirect' ? [] : draftTags, true);
+    $('#editTagChips', editor).innerHTML = draftTags.map((tag,index) => '<span class="tag-chip">' + esc(tag) + '<button type="button" data-remove-tag="' + index + '" aria-label="' + esc(t('Quitar tag', 'Remove tag') + ': ' + tag) + '">×</button></span>').join(''); };
+  $('#editTagChips', editor).onclick = event => { const remove = event.target.closest('[data-remove-tag]'); if (remove) { draftTags.splice(Number(remove.dataset.removeTag),1); paintTags(); state.dirty = true; } };
+  const addTag = () => { const input = $('#editTags', editor), value = input.value.trim().replace(/\s+/g,' '); if (!value) return; if (draftTags.length >= 20 || value.length > 50 || /[<>\x00-\x1f]/.test(value)) { showError(editor, validationError(t('Usa hasta 20 tags de 1–50 caracteres, sin HTML.', 'Use up to 20 tags of 1–50 characters, without HTML.'))); return; } if (!draftTags.some(tag => tag.toLowerCase() === value.toLowerCase())) draftTags.push(value); input.value = ''; paintTags(); state.dirty = true; };
+  $('#editTags', editor).onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); addTag(); } };
+  $('#editTags', editor).onblur = addTag;
+  $('#editWip', editor).onchange = () => { state.dirty = true; };
+  paintTags();
+  $('#addPageTag', editor).onclick = addTag;
   if (page) {
     const historyButton = document.createElement('button');
     historyButton.type = 'button';
     historyButton.className = 'secondary-button';
     historyButton.textContent = t('Historial', 'History');
-    $('#savePage', editor).parentElement.insertBefore(historyButton, $('#savePage', editor));
+    $('.editor-page-header', editor).append(historyButton);
     historyButton.onclick = async () => {
       try {
         const historySpace = state.space;
@@ -4474,7 +4727,7 @@ async function openEditor(root, page) {
           inputOptions: Object.fromEntries(
             revisions.revisions.map((revision) => [
               revision.id,
-              `${new Date(revision.revision_at).toLocaleString()} — ${revision.revision_by_name || t('Usuario eliminado', 'Deleted user')}`,
+              `${new Date(revision.revision_at).toLocaleString(state.lang, { timeZone: state.config.site.timeZone })} — ${revision.revision_by_name || t('Usuario eliminado', 'Deleted user')}`,
             ]),
           ),
           showCancelButton: true,
@@ -4497,7 +4750,7 @@ async function openEditor(root, page) {
           { method: 'PUT', headers: { 'X-Wiki-Space': saveSpace } },
         );
         state.dirty = false;
-        const refreshed = await api(`/api/pages/${encodeURIComponent(currentSlug)}`, {
+        const refreshed = await api(`/api/admin/pages/${encodeURIComponent(currentSlug)}`, {
           headers: { 'X-Wiki-Space': saveSpace },
         });
         if (state.space !== saveSpace)
@@ -4509,9 +4762,8 @@ async function openEditor(root, page) {
     };
   }
   const updateEditorHeading = (title) => {
-    $('#editorHeading', editor).textContent = page
-      ? t('Editando el archivo:', 'Editing file:') + ' ' + (title || first || currentSlug)
-      : t('Nueva página', 'New page');
+    const action = page ? t('Editar página', 'Edit page') : t('Crear nueva página', 'Create new page');
+    $('#editorHeading', editor).textContent = title ? action + ': ' + title : action;
   };
   const content = $('#editContent', editor),
     source = $('.editor-source', editor),
@@ -4630,190 +4882,13 @@ async function openEditor(root, page) {
     const redirect = $('#editPageType').value === 'redirect';
     $('#redirectPageFields').hidden = !redirect;
     $('#contentPageFields').hidden = redirect;
+    paintTags();
+    renderEditorToc(content);
     state.dirty = true;
   };
-  $('#editIconMode').onchange = () => {
-    const image = $('#editIconMode').value === 'image';
-    $('#editIconWrap').hidden = image;
-    $('#editIconImageWrap').hidden = !image;
-    state.dirty = true;
-  };
-  $('#editIcon').oninput = () => (state.dirty = true);
-  $('#uploadPageIcon').onchange = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const status = $('#pageIconStatus');
-    try {
-      status.textContent = t('Subiendo imagen…', 'Uploading image…');
-      const body = new FormData();
-      body.append('image', file);
-      body.append('alt', $('#editTitle').value);
-      const response = await request('/api/admin/uploads', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'X-Wiki-Space': state.space, 'X-CSRF-Token': state.csrf },
-        body,
-      });
-      const data = await imageUploadResponse(response);
-      $('#editIconImagePath').value = data.url;
-      setPageIconUploadStatus(status, data.url);
-      state.dirty = true;
-    } catch (err) {
-      status.textContent = '';
-      showError(editor, err);
-    } finally {
-      e.target.value = '';
-    }
-  };
+  $('#redirectUrl').oninput = () => { state.dirty = true; };
   $('#editCategory').onchange = () => (state.dirty = true);
-  let savedRange = null;
-  editor.querySelector('.editor-toolbar').addEventListener('mousedown', (event) => {
-    const selection = getSelection();
-    if (selection?.rangeCount && content.contains(selection.anchorNode))
-      savedRange = selection.getRangeAt(0).cloneRange();
-  });
-  const restoreRange = () => {
-    if (!savedRange) return;
-    content.focus();
-    const selection = getSelection();
-    selection.removeAllRanges();
-    selection.addRange(savedRange);
-  };
-  $$('[data-command]', editor).forEach((button) => {
-    button.onmousedown = (event) => event.preventDefault();
-    button.onclick = async () => {
-      restoreRange();
-      const cmd = button.dataset.command;
-      if (!source.hidden && ['undo', 'redo'].includes(cmd)) {
-        source.focus();
-        document.execCommand(cmd === 'undo' ? 'undo' : 'redo');
-      } else if (
-        !source.hidden &&
-        ['strike', 'heading', 'text-color', 'highlight', 'font', 'alignment', 'clear-format'].includes(cmd)
-      ) {
-        if (cmd === 'strike') addSourceMarkup(source, 'strike');
-        else if (cmd === 'heading') addSourceMarkup(source, $('[data-tool=heading]', editor).value);
-        else if (cmd === 'text-color' || cmd === 'highlight') {
-          const property = cmd === 'text-color' ? 'color' : 'mark';
-          Swal.fire({
-            title:
-              cmd === 'text-color'
-                ? t('Color de letra', 'Text color')
-                : t('Resaltado de texto', 'Text highlight'),
-            input: 'color',
-            showCancelButton: true,
-            buttonsStyling: false,
-            customClass: {
-              popup: 'wiki-swal-popup editor-swal-popup',
-              confirmButton: 'primary-button',
-              cancelButton: 'secondary-button',
-            },
-            confirmButtonText: t('Aplicar', 'Apply'),
-            cancelButtonText: t('Cancelar', 'Cancel'),
-          }).then((result) => {
-            if (result.isConfirmed) addSourceMarkup(source, property + '="' + result.value + '"');
-          });
-        } else if (cmd === 'clear-format') addSourceMarkup(source, 'clear-format');
-        else
-          addSourceMarkup(
-            source,
-            cmd === 'font'
-              ? 'font="' + $('[data-tool=font]', editor).value + '"'
-              : 'align="' + $('[data-tool=alignment]', editor).value + '"',
-          );
-      } else if (cmd === 'strike') document.execCommand('strikeThrough');
-      else if (
-        [
-          'text-color',
-          'highlight',
-          'font',
-          'heading',
-          'alignment',
-          'undo',
-          'redo',
-          'indent',
-          'outdent',
-          'unlink',
-          'clear-format',
-          'special-chars',
-          'emoji',
-          'image',
-        ].includes(cmd)
-      )
-        runEditorAdvancedTool(cmd, content);
-      else await runEditorCommand(cmd, content);
-      refreshToolbarState();
-    };
-  });
-  $$('[data-tool]', editor).forEach(
-    (control) =>
-      (control.onchange = () => {
-        restoreRange();
-        if (!source.hidden) {
-          const value =
-            control.dataset.tool === 'heading'
-              ? control.value
-              : control.dataset.tool === 'alignment'
-                ? 'align="' + control.value + '"'
-                : 'font="' + control.value + '"';
-          addSourceMarkup(source, value);
-        } else runEditorAdvancedTool(control.dataset.tool, content);
-        refreshToolbarState();
-      }),
-  );
-  const refreshToolbarState = () => {
-    if (!source.hidden) {
-      $$('.editor-toolbar .active', editor).forEach((button) => {
-        if (!button.matches('[data-source-toggle]')) button.classList.remove('active');
-      });
-      return;
-    }
-    const selection = getSelection(),
-      anchor =
-        selection?.anchorNode?.nodeType === Node.ELEMENT_NODE
-          ? selection.anchorNode
-          : selection?.anchorNode?.parentElement,
-      link = anchor?.closest?.('a');
-    editor.querySelector('[data-command="unlink"]').disabled = !link;
-    editor.querySelector('[data-command="clear-format"]').disabled = false;
-    editor.querySelector('[data-command="undo"]').disabled = !document.queryCommandEnabled('undo');
-    editor.querySelector('[data-command="redo"]').disabled = !document.queryCommandEnabled('redo');
-    for (const [command, stateName] of [
-      ['bold', 'bold'],
-      ['italic', 'italic'],
-      ['underline', 'underline'],
-      ['strikeThrough', 'strikeThrough'],
-    ])
-      editor
-        .querySelector('[data-command="' + (stateName === 'strikeThrough' ? 'strike' : stateName) + '"]')
-        ?.classList.toggle('active', Boolean(document.queryCommandState?.(command)));
-    editor.querySelector('[data-command="link"]')?.classList.toggle('active', Boolean(link));
-    const block = anchor?.closest?.('h1,h2,h3,h4,h5,h6,p'),
-      headingControl = editor.querySelector('[data-tool="heading"]');
-    editor.querySelector('[data-command="indent"]')?.classList.toggle('active', Boolean(anchor?.closest?.('.editor-indent')));
-    if (headingControl && block) headingControl.value = block.tagName.toLowerCase();
-    const align = anchor?.closest?.('[style*="text-align"]')?.style.textAlign || 'left',
-      alignControl = editor.querySelector('[data-tool="alignment"]');
-    if (alignControl) {
-      alignControl.value = ['left', 'center', 'right', 'justify'].includes(align) ? align : 'left';
-      const icon = alignControl.parentElement.querySelector('i');
-      if (icon) icon.className = 'fa-solid fa-align-' + alignControl.value;
-    }
-    const styled = anchor?.closest?.('span[style]'),
-      colorButton = editor.querySelector('[data-command="text-color"]'),
-      highlightButton = editor.querySelector('[data-command="highlight"]'),
-      fontControl = editor.querySelector('[data-tool="font"]');
-    colorButton?.classList.toggle('active', Boolean(styled?.style.color));
-    highlightButton?.classList.toggle('active', Boolean(styled?.style.backgroundColor));
-    if (fontControl) {
-      const family = styled?.style.fontFamily || '';
-      fontControl.value = [...fontControl.options].some((option) => option.text === family) ? family : '';
-      fontControl.parentElement.classList.toggle('active', Boolean(family));
-    }
-  };
-  content.addEventListener('keyup', refreshToolbarState);
-  content.addEventListener('mouseup', refreshToolbarState);
-  content.addEventListener('input', refreshToolbarState);
+  const refreshToolbarState = bindFormattingToolbar(editor, content, source);
   let selectedMedia = null;
   const placeCaretBesideMedia = (media, after = true) => {
     if (!media?.isConnected) return false;
@@ -5265,9 +5340,25 @@ async function openEditor(root, page) {
         showError(editor, err);
       }
     };
+  $('#previewPage', editor).onclick = () => {
+    const title = $('#editTitle', editor).value || t('Vista previa', 'Preview');
+    const redirect = $('#editPageType', editor).value === 'redirect';
+    const frame = document.createElement('iframe');
+    frame.title = title;
+    frame.className = 'editor-preview-frame';
+    frame.setAttribute('sandbox', '');
+    const body = redirect ? '<p>' + esc($('#redirectUrl', editor).value) + '</p>' : editorHtmlFromMarkup(source.hidden ? editorContentHtml(content) : source.value);
+    const tags = redirect ? '' : draftTags.map(tag => '<span class="search-tag">' + esc(tag) + '</span>').join(' ');
+    frame.srcdoc = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; base-uri 'none'; form-action 'none'"><link rel="stylesheet" href="/styles.css"><body class="${document.body.classList.contains('light') ? 'light' : ''}" style="display:block;height:auto;overflow:auto;padding:1rem"><article class="article"><h1>${esc(title)}</h1>${body}</article><div class="article-tag-list">${tags}</div></body>`;
+    Swal.fire({ title: t('Vista previa', 'Preview'), html: frame, width: 'min(850px, 95vw)', confirmButtonText: t('Cerrar', 'Close') });
+  };
+  $('#saveDraft').onclick = event => $('#savePage').onclick(event);
   $('#savePage').onclick = async (event) => {
     event.preventDefault();
-    const saveButton = $('#savePage'),
+    if (savingPage) return;
+    savingPage = true;
+    const isDraft = event.currentTarget.id === 'saveDraft';
+    const saveButton = event.currentTarget,
       finishLoading = beginButtonLoading(saveButton);
     try {
       await new Promise((resolve) => requestAnimationFrame(() => resolve()));
@@ -5284,11 +5375,13 @@ async function openEditor(root, page) {
             .filter(([, value]) => value.trim()),
         );
       const pageType = $('#editPageType').value;
+      if (!brand.valid()) throw validationError(t('Selecciona una marca válida.', 'Select a valid brand.'));
+      if (!$('#editCategory').reportValidity()) return;
       if (!Object.keys(titles).length)
         throw validationError(
           t('Agrega un título en al menos un idioma.', 'Add a title in at least one language.'),
         );
-      if (pageType === 'content' && !Object.keys(contents).length)
+      if (!isDraft && pageType === 'content' && !Object.keys(contents).length)
         throw validationError(
           t('Agrega contenido en al menos un idioma.', 'Add content in at least one language.'),
         );
@@ -5302,10 +5395,13 @@ async function openEditor(root, page) {
           body: JSON.stringify({
             titles,
             content: pageType === 'content' ? contents : {},
-            icon: $('#editIconMode').value === 'image' ? $('#editIconImagePath').value : $('#editIcon').value,
+            icon: brand.value(),
             pageType,
+            publicationStatus: isDraft ? 'draft' : 'published',
+            isWip: pageType === 'content' && $('#editWip').checked,
+            tags: pageType === 'content' ? draftTags : [],
             redirectUrl: pageType === 'redirect' ? $('#redirectUrl').value.trim() : null,
-            categoryId: pageType === 'content' ? $('#editCategory').value || null : null,
+            categoryId: $('#editCategory').value === 'general' ? null : $('#editCategory').value,
           }),
         });
       if (!saved.ok || saved.slug !== slug || saved.space !== saveSpace)
@@ -5321,7 +5417,7 @@ async function openEditor(root, page) {
       $('#toc').hidden = true;
       setNotice(t('Página guardada.', 'Page saved.'));
       try {
-        const refreshed = await api('/api/pages', { headers: { 'X-Wiki-Space': saveSpace } });
+        const refreshed = await api('/api/admin/pages', { headers: { 'X-Wiki-Space': saveSpace } });
         if (state.space !== saveSpace)
           throw new Error(
             t('El espacio de trabajo cambió durante el guardado.', 'The workspace changed while saving.'),
@@ -5344,6 +5440,7 @@ async function openEditor(root, page) {
       showError(editor, error);
     } finally {
       finishLoading();
+      savingPage = false;
     }
   };
   $('#cancelEditor').onclick = async () => {
@@ -5362,33 +5459,7 @@ async function backupsTab(root) {
         dateStyle: 'medium',
         timeStyle: 'short',
         timeZone,
-      }).format(new Date(value)),
-    availableZones =
-      Array.isArray(result.timeZones) && result.timeZones.length
-        ? result.timeZones
-        : [
-            ...new Set([
-              'UTC',
-              ...(typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : []),
-            ]),
-          ].sort(),
-    selectedZone = availableZones.includes(result.timeZone)
-      ? result.timeZone
-      : availableZones.includes('America/Guayaquil')
-        ? 'America/Guayaquil'
-        : availableZones[0],
-    zoneOptions = availableZones
-      .map(
-        (zone) =>
-          '<option value="' +
-          esc(zone) +
-          '" ' +
-          (zone === selectedZone ? 'selected' : '') +
-          '>' +
-          esc(zone) +
-          '</option>',
-      )
-      .join('');
+      }).format(new Date(value));
   let currentPage = 1;
   const rows = () => {
     const list = result.backups || [],
@@ -5431,28 +5502,19 @@ async function backupsTab(root) {
     ) +
     '</p></div><div class="backup-settings-grid">' +
     (permissions.schedule
-      ? '<label class="backup-timezone-field"><span class="admin-label">' +
-        t('Zona horaria', 'Time zone') +
-        '</span><select class="settings-input" id="backupTimeZone">' +
-        zoneOptions +
-        '</select><small>' +
-        t(
-          'El próximo backup se calculará con esta zona.',
-          'The next backup will be scheduled in this zone.',
-        ) +
-        '</small></label><label><span class="admin-label">' +
+      ? '<label><span class="admin-label">' +
         t('Máximo de backups', 'Maximum backups') +
         ' <strong id="backupRetentionValue">' +
         esc(result.retention) +
-        '</strong></span><input id="backupRetention" type="range" min="1" max="30" step="1" value="' +
+        '</strong></span><input id="backupRetention" type="range" min="0" max="30" step="1" value="' +
         esc(result.retention) +
         '"><small>' +
-        t('Se conservarán los más recientes.', 'The newest backups will be kept.') +
+        t('Selecciona 0 para desactivar la creación de copias.', 'Select 0 to disable backup creation.') +
         '</small></label><label><span class="admin-label">CRON</span><input class="settings-input" id="backupCron" maxlength="100" value="' +
         esc(result.cron) +
         '" placeholder="0 2 * * *"><small>' +
         t('Siguiente ejecución: ', 'Next run: ') +
-        esc(formatDate(result.nextRunAt)) +
+        esc(result.nextRunAt ? formatDate(result.nextRunAt) : t('Desactivada', 'Disabled')) +
         '</small></label>'
       : '<p>' +
         t(
@@ -5498,7 +5560,7 @@ async function backupsTab(root) {
     ' / ' +
     esc(result.retention) +
     '</span>' +
-    (permissions.export
+    (permissions.export && result.retention !== 0
       ? '<button class="primary-button" type="button" id="createBackup"><i class="fa-solid fa-plus"></i> ' +
         t('CREAR BACKUP', 'CREATE BACKUP') +
         '</button>'
@@ -5616,13 +5678,12 @@ async function backupsTab(root) {
         body: JSON.stringify({
           cron: $('#backupCron', root).value.trim(),
           retention: Number($('#backupRetention', root).value),
-          timeZone: $('#backupTimeZone', root).value,
         }),
       });
       await notify({
         icon: 'success',
         title: t('Programación guardada', 'Schedule saved'),
-        text: t('Próxima ejecución: ', 'Next run: ') + formatDate(saved.nextRunAt, saved.timeZone),
+        text: saved.nextRunAt ? t('Próxima ejecución: ', 'Next run: ') + formatDate(saved.nextRunAt, saved.timeZone) : t('Copias desactivadas.', 'Backup creation disabled.'),
       });
       await adminView('backups');
     } catch (error) {
@@ -5780,6 +5841,158 @@ function codeBlockText(code) {
     return text;
   };
   return read(code);
+}
+function bindFormattingToolbar(editor, content, source) {
+  let savedRange = null;
+  editor.querySelector('.editor-toolbar').addEventListener('mousedown', (event) => {
+    const selection = getSelection();
+    if (selection?.rangeCount && content.contains(selection.anchorNode))
+      savedRange = selection.getRangeAt(0).cloneRange();
+  });
+  const restoreRange = () => {
+    if (!savedRange) return;
+    content.focus();
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(savedRange);
+  };
+  $$('[data-command]', editor).forEach((button) => {
+    button.onmousedown = (event) => event.preventDefault();
+    button.onclick = async () => {
+      restoreRange();
+      const cmd = button.dataset.command;
+      if (!source.hidden && ['undo', 'redo'].includes(cmd)) {
+        source.focus();
+        document.execCommand(cmd === 'undo' ? 'undo' : 'redo');
+      } else if (
+        !source.hidden &&
+        ['strike', 'heading', 'text-color', 'highlight', 'font', 'alignment', 'clear-format'].includes(cmd)
+      ) {
+        if (cmd === 'strike') addSourceMarkup(source, 'strike');
+        else if (cmd === 'heading') addSourceMarkup(source, $('[data-tool=heading]', editor).value);
+        else if (cmd === 'text-color' || cmd === 'highlight') {
+          const property = cmd === 'text-color' ? 'color' : 'mark';
+          Swal.fire({
+            title:
+              cmd === 'text-color'
+                ? t('Color de letra', 'Text color')
+                : t('Resaltado de texto', 'Text highlight'),
+            input: 'color',
+            showCancelButton: true,
+            buttonsStyling: false,
+            customClass: {
+              popup: 'wiki-swal-popup editor-swal-popup',
+              confirmButton: 'primary-button',
+              cancelButton: 'secondary-button',
+            },
+            confirmButtonText: t('Aplicar', 'Apply'),
+            cancelButtonText: t('Cancelar', 'Cancel'),
+          }).then((result) => {
+            if (result.isConfirmed) addSourceMarkup(source, property + '="' + result.value + '"');
+          });
+        } else if (cmd === 'clear-format') addSourceMarkup(source, 'clear-format');
+        else
+          addSourceMarkup(
+            source,
+            cmd === 'font'
+              ? 'font="' + $('[data-tool=font]', editor).value + '"'
+              : 'align="' + $('[data-tool=alignment]', editor).value + '"',
+          );
+      } else if (cmd === 'strike') document.execCommand('strikeThrough');
+      else if (
+        [
+          'text-color',
+          'highlight',
+          'font',
+          'heading',
+          'alignment',
+          'undo',
+          'redo',
+          'indent',
+          'outdent',
+          'unlink',
+          'clear-format',
+          'special-chars',
+          'emoji',
+          'image',
+        ].includes(cmd)
+      )
+        runEditorAdvancedTool(cmd, content);
+      else await runEditorCommand(cmd, content);
+      refreshToolbarState();
+    };
+  });
+  $$('[data-tool]', editor).forEach(
+    (control) =>
+      (control.onchange = () => {
+        restoreRange();
+        if (!source.hidden) {
+          const value =
+            control.dataset.tool === 'heading'
+              ? control.value
+              : control.dataset.tool === 'alignment'
+                ? 'align="' + control.value + '"'
+                : 'font="' + control.value + '"';
+          addSourceMarkup(source, value);
+        } else runEditorAdvancedTool(control.dataset.tool, content);
+        refreshToolbarState();
+      }),
+  );
+  const refreshToolbarState = () => {
+    if (!source.hidden) {
+      $$('.editor-toolbar .active', editor).forEach((button) => {
+        if (!button.matches('[data-source-toggle]')) button.classList.remove('active');
+      });
+      return;
+    }
+    const selection = getSelection(),
+      anchor =
+        selection?.anchorNode?.nodeType === Node.ELEMENT_NODE
+          ? selection.anchorNode
+          : selection?.anchorNode?.parentElement,
+      link = anchor?.closest?.('a');
+    editor.querySelector('[data-command="unlink"]').disabled = !link;
+    editor.querySelector('[data-command="clear-format"]').disabled = false;
+    editor.querySelector('[data-command="undo"]').disabled = !document.queryCommandEnabled('undo');
+    editor.querySelector('[data-command="redo"]').disabled = !document.queryCommandEnabled('redo');
+    for (const [command, stateName] of [
+      ['bold', 'bold'],
+      ['italic', 'italic'],
+      ['underline', 'underline'],
+      ['strikeThrough', 'strikeThrough'],
+    ])
+      editor
+        .querySelector('[data-command="' + (stateName === 'strikeThrough' ? 'strike' : stateName) + '"]')
+        ?.classList.toggle('active', Boolean(document.queryCommandState?.(command)));
+    editor.querySelector('[data-command="link"]')?.classList.toggle('active', Boolean(link));
+    const block = anchor?.closest?.('h1,h2,h3,h4,h5,h6,p'),
+      headingControl = editor.querySelector('[data-tool="heading"]');
+    editor.querySelector('[data-command="indent"]')?.classList.toggle('active', Boolean(anchor?.closest?.('.editor-indent')));
+    if (headingControl && block) headingControl.value = block.tagName.toLowerCase();
+    const align = anchor?.closest?.('[style*="text-align"]')?.style.textAlign || 'left',
+      alignControl = editor.querySelector('[data-tool="alignment"]');
+    if (alignControl) {
+      alignControl.value = ['left', 'center', 'right', 'justify'].includes(align) ? align : 'left';
+      const icon = alignControl.parentElement.querySelector('i');
+      if (icon) icon.className = 'fa-solid fa-align-' + alignControl.value;
+    }
+    const styled = anchor?.closest?.('span[style]'),
+      colorButton = editor.querySelector('[data-command="text-color"]'),
+      highlightButton = editor.querySelector('[data-command="highlight"]'),
+      fontControl = editor.querySelector('[data-tool="font"]');
+    colorButton?.classList.toggle('active', Boolean(styled?.style.color));
+    highlightButton?.classList.toggle('active', Boolean(styled?.style.backgroundColor));
+    if (fontControl) {
+      const family = styled?.style.fontFamily || '';
+      fontControl.value = [...fontControl.options].some((option) => option.text === family) ? family : '';
+      fontControl.parentElement.classList.toggle('active', Boolean(family));
+    }
+  };
+  content.addEventListener('keyup', refreshToolbarState);
+  content.addEventListener('mouseup', refreshToolbarState);
+  content.addEventListener('input', refreshToolbarState);
+  refreshToolbarState();
+  return refreshToolbarState;
 }
 function editorToolbarMarkup() {
   const english = {
@@ -7519,7 +7732,7 @@ async function categoriesTab(root) {
     spaceOptions = spaces
       .map(
         (space) =>
-          `<option value="${esc(space.slug)}" ${space.slug === state.space ? 'selected' : ''}>${esc(space.name)} (${space.slug === 'main' ? '/' : '/' + space.slug})</option>`,
+          `<option value="${esc(space.slug)}" ${space.slug === state.space ? 'selected' : ''}>${esc(navigationTitle(space))} (${space.slug === 'main' ? '/' : '/' + space.slug})</option>`,
       )
       .join(''),
     langs = state.config.languages,
@@ -7534,7 +7747,7 @@ async function categoriesTab(root) {
     c.names[state.lang.split('-')[0]] ||
     Object.values(c.names)[0] ||
     t('Categoría', 'Category');
-  root.innerHTML = `<section class="admin-section workspace-selector-section"><div><h2>${t('Espacio de trabajo', 'Working space')}</h2><p>${t('Elige el espacio cuyas categorías quieres administrar.', 'Choose the space whose categories you want to manage.')}</p></div><label class="workspace-select-label"><span class="admin-label">${t('Espacio de documentación', 'Documentation space')}</span><select class="settings-input" id="categoriesSpaceSelect">${spaceOptions}</select></label></section><section class="admin-section category-manager-section"><div class="section-heading"><div><h2>${t('Categorías de navegación', 'Navigation categories')}</h2><p>${t('Organiza las secciones de este espacio. Arrastra para cambiar el orden.', 'Organize this space. Drag categories to change their order.')}</p></div><span class="category-count">${state.categories.length}</span></div><div id="categoryRows" class="category-rows">${state.categories.map((category, index) => `<div class="category-row" draggable="true" data-category-id="${category.id}"><button type="button" class="drag-handle" aria-label="${t('Arrastrar categoría', 'Drag category')}" title="${t('Arrastrar para ordenar', 'Drag to reorder')}"><i class="fa-solid fa-grip-vertical"></i></button><span class="category-order">${String(index + 1).padStart(2, '0')}</span><span class="category-icon-preview">${pageIconMarkup(category.icon)}</span><strong>${esc(categoryLabel(category))}</strong><span class="category-parent-label">${category.parent_id ? esc(categoryLabel(state.categories.find((item) => Number(item.id) === Number(category.parent_id)) || { names: {} })) : t('Principal', 'Root')}</span><button class="icon-button edit-category" data-id="${category.id}" title="${t('Editar', 'Edit')}"><i class="fa-solid fa-pen"></i></button><button class="icon-button remove-category" data-id="${category.id}" title="${t('Eliminar', 'Delete')}"><i class="fa-solid fa-trash"></i></button></div>`).join('') || `<div class="empty-state">${t('Todavía no hay categorías.', 'No categories yet.')}</div>`}</div><div class="category-create-panel"><h3>${t('Añadir categoría', 'Add category')}</h3><div class="category-name-editor"><label><span class="admin-label">${t('Idioma', 'Language')}</span><select class="settings-input" id="newCategoryLanguage">${languageOptions}</select></label><label><span class="admin-label">${t('Nombre de categoría', 'Category name')}</span><input class="settings-input" id="newCategoryName" maxlength="120" placeholder="${t('Por ejemplo: Guía', 'For example: Guide')}"></label></div><div class="category-fields-grid"><label><span class="admin-label">${t('Tipo de marca', 'Brand type')}</span><select id="categoryMarkMode" class="settings-input"><option value="icon">${t('Insertar un ícono', 'Insert an icon')}</option><option value="image">${t('Subir una imagen', 'Upload an image')}</option></select></label><label id="categoryIconWrap"><span class="admin-label">${t('Ícono Font Awesome', 'Font Awesome icon')}</span><input id="categoryIcon" class="settings-input" value="fa-solid fa-folder" placeholder="fa-solid fa-folder"></label><label id="categoryImageWrap" hidden><span class="admin-label">${t('Subir una imagen', 'Upload an image')}</span><input id="categoryImageFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp"><input id="categoryImagePath" type="hidden"><small id="categoryImageStatus">${t('No hay imagen subida', 'No image uploaded')}</small></label><label><span class="admin-label">${t('Categoría principal', 'Parent category')}</span><select id="categoryParent" class="settings-input"><option value="">${t('Ninguna', 'None')}</option>${state.categories.map((category) => `<option value="${category.id}">${esc(categoryLabel(category))}</option>`).join('')}</select></label></div><label class="category-open-default"><input id="categoryOpen" type="checkbox" checked> ${t('Mantener abierta la subcategoría al ingresar a la página', 'Keep the subcategory expanded when opening the page')}</label><button class="primary-button" id="createCategory"><i class="fa-solid fa-plus"></i> ${t('Crear categoría', 'Create category')}</button></div></section>`;
+  root.innerHTML = `<section class="admin-section workspace-selector-section"><div><h2>${t('Espacio de trabajo', 'Working space')}</h2><p>${t('Elige el espacio cuyas categorías quieres administrar.', 'Choose the space whose categories you want to manage.')}</p></div><label class="workspace-select-label"><span class="admin-label">${t('Espacio de documentación', 'Documentation space')}</span><select class="settings-input" id="categoriesSpaceSelect">${spaceOptions}</select></label></section><section class="admin-section category-manager-section"><div class="section-heading"><div><h2>${t('Categorías de navegación', 'Navigation categories')}</h2><p>${t('Organiza las secciones de este espacio. Arrastra para cambiar el orden.', 'Organize this space. Drag categories to change their order.')}</p></div><span class="category-count">${state.categories.length}</span></div><div id="categoryRows" class="category-rows">${state.categories.map((category, index) => `<div class="category-row" draggable="true" data-category-id="${category.id}"><button type="button" class="drag-handle" aria-label="${t('Arrastrar categoría', 'Drag category')}" title="${t('Arrastrar para ordenar', 'Drag to reorder')}"><i class="fa-solid fa-grip-vertical"></i></button><span class="category-order">${String(index + 1).padStart(2, '0')}</span><span class="category-icon-preview">${pageIconMarkup(category.icon)}</span><strong>${esc(categoryLabel(category))}</strong><span class="category-parent-label">${category.parent_id ? esc(categoryLabel(state.categories.find((item) => Number(item.id) === Number(category.parent_id)) || { names: {} })) : t('Principal', 'Root')}</span><button class="icon-button edit-category" data-id="${category.id}" title="${t('Editar', 'Edit')}"><i class="fa-solid fa-pen"></i></button><button class="icon-button remove-category" data-id="${category.id}" title="${t('Eliminar', 'Delete')}"><i class="fa-solid fa-trash"></i></button></div>`).join('') || `<div class="empty-state">${t('Todavía no hay categorías.', 'No categories yet.')}</div>`}</div><div class="category-create-panel"><h3>${t('Añadir categoría', 'Add category')}</h3><div class="category-name-editor"><label><span class="admin-label">${t('Idioma', 'Language')}</span><select class="settings-input" id="newCategoryLanguage">${languageOptions}</select></label><label><span class="admin-label">${t('Nombre de categoría', 'Category name')}</span><input class="settings-input" id="newCategoryName" maxlength="120" placeholder="${t('Por ejemplo: Guía', 'For example: Guide')}"></label></div><div class="category-fields-grid">${brandFields('categoryBrand', 'fa-solid fa-folder', 'fa-solid fa-folder')}<label><span class="admin-label">${t('Categoría principal', 'Parent category')}</span><select id="categoryParent" class="settings-input"><option value="">${t('Ninguna', 'None')}</option>${state.categories.map((category) => `<option value="${category.id}">${esc(categoryLabel(category))}</option>`).join('')}</select></label></div><label class="category-open-default"><input id="categoryOpen" type="checkbox" checked> ${t('Mantener abierta la subcategoría al ingresar a la página', 'Keep the subcategory expanded when opening the page')}</label></div></section>`;
   const categoryCreatePanel = $('.category-create-panel', root);
   categoryCreatePanel.classList.add('category-create-dialog');
   const categoryCreateMarkup = categoryCreatePanel.outerHTML;
@@ -7563,255 +7776,88 @@ async function categoriesTab(root) {
     }
     await changeAdminSpace(event.target.value, 'categories', root);
   };
-  addCategoryButton.onclick = async () => {
-    let draftNames = {};
-    await Swal.fire({
-      title: t('Añadir categoría', 'Add category'),
+  const openCategoryEditor = async (category = null) => {
+    const names = { ...(category?.names || {}) };
+    let brand;
+    const choice = await brandFormDialog({
+      title: category ? t('Editar categoría', 'Edit category') : t('Añadir categoría', 'Add category'),
       html: categoryCreateMarkup,
       showCancelButton: true,
-      showConfirmButton: false,
+      showLoaderOnConfirm: true,
+      confirmButtonText: category ? t('Guardar', 'Save') : t('Crear categoría', 'Create category'),
       cancelButtonText: t('Cancelar', 'Cancel'),
+      reverseButtons: true,
       buttonsStyling: false,
       customClass: {
         popup: 'wiki-swal-popup category-create-popup',
         title: 'wiki-swal-title',
         htmlContainer: 'wiki-swal-body',
+        confirmButton: 'primary-button',
         cancelButton: 'secondary-button',
       },
       focusConfirm: false,
       didOpen: () => {
         const form = Swal.getHtmlContainer(),
-          field = (selector) => $(selector, form),
-          language = field('#newCategoryLanguage'),
-          name = field('#newCategoryName');
-        const categoryError = document.createElement('div');
-        categoryError.className = 'category-create-error';
-        categoryError.setAttribute('role', 'alert');
-        categoryError.setAttribute('aria-live', 'assertive');
-        categoryError.hidden = true;
-        $('h3', form).after(categoryError);
-        const clearCategoryError = () => {
-          categoryError.textContent = '';
-          categoryError.hidden = true;
-        };
-        const showCategoryError = (error) => {
-          if (!isUserError(error)) {
-            showCouldNotStart(error, 'category-editor', { path: 'category-create' });
-            return;
-          }
-          categoryError.textContent = userErrorText(error);
-          categoryError.hidden = false;
-        };
-        const showCategoryValidation = (message) => {
-          categoryError.textContent = message;
-          categoryError.hidden = false;
-        };
+          language = $('#newCategoryLanguage', form),
+          name = $('#newCategoryName', form),
+          parent = $('#categoryParent', form);
+        $('h3', form).remove();
+        $('#categoryBrandFields', form).outerHTML = brandFields('categoryBrand', category?.icon || 'fa-solid fa-folder', 'fa-solid fa-folder');
+        brand = bindBrandFields(form, 'categoryBrand', { onChange: () => Swal.resetValidationMessage() });
         language.dataset.current = language.value;
+        name.value = names[language.value] || '';
         language.onchange = () => {
-          draftNames[language.dataset.current] = name.value.trim();
+          names[language.dataset.current] = name.value.trim();
           language.dataset.current = language.value;
-          name.value = draftNames[language.value] || '';
-          clearCategoryError();
+          name.value = names[language.value] || '';
+          Swal.resetValidationMessage();
         };
-        name.addEventListener('input', clearCategoryError);
-        field('#categoryMarkMode').onchange = () => {
-          const image = field('#categoryMarkMode').value === 'image';
-          field('#categoryIconWrap').hidden = image;
-          field('#categoryImageWrap').hidden = !image;
-          clearCategoryError();
-        };
-        field('#categoryParent').addEventListener('change', clearCategoryError);
-        field('#categoryImageFile').onchange = async (event) => {
-          const file = event.target.files?.[0];
-          if (!file) return;
-          const status = field('#categoryImageStatus');
-          try {
-            status.textContent = t('Subiendo imagen…', 'Uploading image…');
-            const body = new FormData();
-            body.append('image', file);
-            body.append('alt', name.value.trim());
-            const response = await request('/api/admin/uploads', {
-              method: 'POST',
-              credentials: 'same-origin',
-              headers: { 'X-Wiki-Space': state.space, 'X-CSRF-Token': state.csrf },
-              body,
-            });
-            const data = await imageUploadResponse(response);
-            field('#categoryImagePath').value = data.url;
-            status.innerHTML =
-              '<img class="category-image-preview" src="' +
-              esc(data.url) +
-              '" alt=""><a href="' +
-              esc(data.url) +
-              '" target="_blank" rel="noopener noreferrer">' +
-              esc(data.url) +
-              '</a>';
-            setNotice(t('Imagen subida. Guarda la categoría para aplicarla.', 'Image uploaded. Save the category to apply it.'));
-          } catch (error) {
-            status.textContent = '';
-            showCategoryError(error);
-          } finally {
-            event.target.value = '';
-          }
-        };
-        $('#createCategory', form).onclick = async () => {
-          try {
-            draftNames[language.value] = name.value.trim();
-            if (field('#categoryMarkMode').value === 'image' && !field('#categoryImagePath').value)
-              return showCategoryValidation(t('Selecciona un archivo de imagen.', 'Select an image file.'));
-            if (langs.some((lang) => !draftNames[lang]))
-              return showCategoryValidation(t('Completa el nombre de la categoría en todos los idiomas activos.', 'Enter the category name in every active language.'));
-            clearCategoryError();
-            await api('/api/admin/categories', {
-              method: 'POST',
-              body: JSON.stringify({
-                names: draftNames,
-                icon: field('#categoryMarkMode').value === 'image' ? field('#categoryImagePath').value : field('#categoryIcon').value,
-                parentId: field('#categoryParent').value || null,
-                isOpen: field('#categoryOpen').checked,
-              }),
-            });
-            Swal.close();
-            await loadWiki();
-            await adminView('categories');
-          } catch (error) {
-            showCategoryError(error);
-          }
-        };
+        name.oninput = () => Swal.resetValidationMessage();
+        parent.onchange = () => Swal.resetValidationMessage();
+        if (category) {
+          parent.querySelector(`option[value="${category.id}"]`)?.remove();
+          parent.value = category.parent_id || '';
+          $('#categoryOpen', form).checked = !!category.is_open;
+        }
+        name.focus();
       },
-    });
-  };
-  $$('.edit-category', root).forEach(
-    (button) =>
-      (button.onclick = async () => {
-        const category = state.categories.find((item) => item.id === Number(button.dataset.id)),
-          names = { ...category.names },
-          firstLang = langs[0],
-          parentOptions =
-            `<option value="">${t('Ninguna', 'None')}</option>` +
-            state.categories
-              .filter((item) => item.id !== category.id)
-              .map(
-                (item) =>
-                  `<option value="${item.id}" ${Number(item.id) === Number(category.parent_id) ? 'selected' : ''}>${esc(categoryLabel(item))}</option>`,
-              )
-              .join(''),
-          html = `<div class="category-edit-grid"><label><span class="swal-label">${t('Idioma', 'Language')}</span><select id="swalCategoryLanguage" class="swal2-input">${langs.map((lang) => `<option value="${esc(lang)}">${esc((state.config.languageCatalog || []).find((item) => item.code === lang)?.name || lang)}</option>`).join('')}</select></label><label><span class="swal-label">${t('Nombre de categoría', 'Category name')}</span><input id="swalCategoryName" class="swal2-input" maxlength="120"></label><label><span class="swal-label">${t('Tipo de marca', 'Brand type')}</span><select id="swalCategoryMode" class="swal2-input"><option value="icon" ${/^\/media\//.test(category.icon) ? '' : 'selected'}>${t('Insertar un ícono', 'Insert an icon')}</option><option value="image" ${/^\/media\//.test(category.icon) ? 'selected' : ''}>${t('Subir una imagen', 'Upload an image')}</option></select></label><label id="swalCategoryIconWrap" ${/^\/media\//.test(category.icon) ? 'hidden' : ''}><span class="swal-label">${t('Ícono Font Awesome', 'Font Awesome icon')}</span><input id="swalCategoryIcon" class="swal2-input" value="${/^\/media\//.test(category.icon) ? 'fa-solid fa-folder' : esc(category.icon)}"></label><label id="swalCategoryImageWrap" ${/^\/media\//.test(category.icon) ? '' : 'hidden'}><span class="swal-label">${t('Subir una imagen', 'Upload an image')}</span><input id="swalCategoryImageFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp"><input id="swalCategoryImagePath" type="hidden" value="${/^\/media\//.test(category.icon) ? esc(category.icon) : ''}"><small id="swalCategoryImageStatus">${/^\/media\//.test(category.icon) ? '<img class="category-image-preview" src="' + esc(category.icon) + '" alt=""><a href="' + esc(category.icon) + '" target="_blank" rel="noopener noreferrer">' + esc(category.icon) + '</a>' : t('No hay imagen subida', 'No image uploaded')}</small></label><label><span class="swal-label">${t('Categoría principal', 'Parent category')}</span><select id="swalCategoryParent" class="swal2-input">${parentOptions}</select></label><label class="category-open-default"><input id="swalCategoryOpen" type="checkbox" ${category.is_open ? 'checked' : ''}> ${t('Mantener abierta la subcategoría al ingresar a la página', 'Keep the subcategory expanded when opening the page')}</label></div>`;
-        const choice = await Swal.fire({
-          title: t('Editar categoría', 'Edit category'),
-          html,
-          showCancelButton: true,
-          buttonsStyling: false,
-          customClass: {
-            popup: 'wiki-swal-popup',
-            title: 'wiki-swal-title',
-            htmlContainer: 'wiki-swal-body',
-            confirmButton: 'primary-button',
-            cancelButton: 'secondary-button',
-          },
-          confirmButtonText: t('Guardar', 'Save'),
-          cancelButtonText: t('Cancelar', 'Cancel'),
-          didOpen: () => {
-            const select = $('#swalCategoryLanguage'),
-              input = $('#swalCategoryName'),
-              mode = $('#swalCategoryMode');
-            mode.onchange = () => {
-              const image = mode.value === 'image';
-              $('#swalCategoryIconWrap').hidden = image;
-              $('#swalCategoryImageWrap').hidden = !image;
-            };
-            $('#swalCategoryImageFile').onchange = async (event) => {
-              const file = event.target.files?.[0];
-              if (!file) return;
-              const status = $('#swalCategoryImageStatus');
-              try {
-                status.textContent = t('Subiendo imagen…', 'Uploading image…');
-                const body = new FormData();
-                body.append('image', file);
-                body.append('alt', $('#swalCategoryName').value.trim());
-                const response = await request('/api/admin/uploads', {
-                  method: 'POST',
-                  credentials: 'same-origin',
-                  headers: { 'X-Wiki-Space': state.space, 'X-CSRF-Token': state.csrf },
-                  body,
-                });
-                const data = await imageUploadResponse(response);
-                status.innerHTML =
-                  '<img class="category-image-preview" src="' +
-                  esc(data.url) +
-                  '" alt=""><a href="' +
-                  esc(data.url) +
-                  '" target="_blank" rel="noopener noreferrer">' +
-                  esc(data.url) +
-                  '</a>';
-              } catch (error) {
-                status.textContent = '';
-                if (isUserError(error)) {
-                  reportClientError('image-upload', error, { status: error.status });
-                  Swal.showValidationMessage(userErrorText(error));
-                } else showCouldNotStart(error, 'image-upload');
-              } finally {
-                event.target.value = '';
-              }
-            };
-            select.value = firstLang;
-            select.dataset.current = firstLang;
-            input.value = names[firstLang] || '';
-            input.oninput = () => (names[select.value] = input.value.trim());
-            select.onchange = () => {
-              names[select.dataset.current] = input.value.trim();
-              select.dataset.current = select.value;
-              input.value = names[select.value] || '';
-            };
-          },
-          preConfirm: () => {
-            const select = $('#swalCategoryLanguage'),
-              input = $('#swalCategoryName');
-            names[select.value] = input.value.trim();
-            if (langs.some((lang) => !names[lang])) {
-              Swal.showValidationMessage(
-                t(
-                  'Completa el nombre en todos los idiomas activos.',
-                  'Enter a name in every active language.',
-                ),
-              );
-              return false;
-            }
-            if ($('#swalCategoryMode').value === 'image' && !$('#swalCategoryImagePath').value) {
-              Swal.showValidationMessage(
-                t('Sube una imagen para la categoría.', 'Upload an image for the category.'),
-              );
-              return false;
-            }
-            return {
-              names,
-              icon:
-                $('#swalCategoryMode').value === 'image'
-                  ? $('#swalCategoryImagePath').value
-                  : $('#swalCategoryIcon').value.trim() || 'fa-solid fa-folder',
-              parentId: $('#swalCategoryParent').value || null,
-              isOpen: $('#swalCategoryOpen').checked,
-            };
-          },
-        });
-        if (!choice.isConfirmed) return;
+      preConfirm: async () => {
+        const form = Swal.getHtmlContainer(),
+          language = $('#newCategoryLanguage', form),
+          name = $('#newCategoryName', form);
+        names[language.value] = name.value.trim();
+        if (langs.some((lang) => !names[lang])) {
+          Swal.showValidationMessage(t('Completa el nombre de la categoría en todos los idiomas activos.', 'Enter the category name in every active language.'));
+          return false;
+        }
+        if (!brand.valid()) {
+          Swal.showValidationMessage(t('Selecciona un ícono válido o sube una imagen para la categoría.', 'Select a valid icon or upload an image for the category.'));
+          return false;
+        }
         try {
-          await api('/api/admin/categories/' + category.id, {
-            method: 'PUT',
+          await api('/api/admin/categories' + (category ? '/' + category.id : ''), {
+            method: category ? 'PUT' : 'POST',
             body: JSON.stringify({
-              names: choice.value.names,
-              icon: choice.value.icon,
-              parentId: choice.value.parentId,
-              isOpen: choice.value.isOpen,
+              names,
+              icon: brand.value(),
+              parentId: $('#categoryParent', form).value || null,
+              isOpen: $('#categoryOpen', form).checked,
             }),
           });
-          await loadWiki();
-          await adminView('categories');
-        } catch (e) {
-          showError($('#adminPanel'), e);
+          return true;
+        } catch (error) {
+          if (isUserError(error)) Swal.showValidationMessage(userErrorText(error));
+          else showCouldNotStart(error, 'category-editor', { path: category ? 'category-edit' : 'category-create' });
+          return false;
         }
-      }),
-  );
+      },
+    });
+    if (choice.isConfirmed) await adminView('categories');
+  };
+  addCategoryButton.onclick = () => openCategoryEditor();
+  $$('.edit-category', root).forEach((button) => {
+    button.onclick = () => openCategoryEditor(state.categories.find((item) => item.id === Number(button.dataset.id)));
+  });
   $$('.remove-category', root).forEach(
     (button) =>
       (button.onclick = async () => {
@@ -7837,7 +7883,6 @@ async function categoriesTab(root) {
         if (!choice.isConfirmed) return;
         try {
           await api('/api/admin/categories/' + button.dataset.id, { method: 'DELETE' });
-          await loadWiki();
           await adminView('categories');
         } catch (e) {
           showError($('#adminPanel'), e);
@@ -7871,7 +7916,6 @@ async function categoriesTab(root) {
     const categoryIds = $$('.category-row', rows).map((row) => Number(row.dataset.categoryId));
     try {
       await api('/api/admin/categories/order', { method: 'PUT', body: JSON.stringify({ categoryIds }) });
-      await loadWiki();
       await adminView('categories');
       setNotice(t('Orden de categorías guardado.', 'Category order saved.'));
     } catch (error) {
@@ -7883,6 +7927,7 @@ async function categoriesTab(root) {
 function closeMobileNav() {
   $('#sidebar').classList.remove('open');
   $('#mobileShade').classList.remove('open');
+  syncPublicSidebarAccessibility();
 }
 function updateBrowserTitle(context) {
   const siteTitle = String(state.config.site.name || state.config.site.pageTitle || 'Teralth Wiki').trim();
@@ -7930,9 +7975,10 @@ function updateBrand() {
   $('#mobileDocsBrand .mobile-docs-name').textContent = state.config.site.name;
   $('#skipToContent').textContent = t('Saltar al contenido', 'Skip to content');
   $('#searchInput').setAttribute('aria-label', t('Buscar documentación', 'Search documentation'));
+  syncArticleSearchLabels();
   $('#searchSuggestions').setAttribute('aria-label', t('Resultados de búsqueda', 'Search results'));
   $('#navTree').setAttribute('aria-label', t('Secciones', 'Sections'));
-  $('#spaceDropdownMenu').setAttribute('aria-label', t('Espacios de documentación', 'Documentation spaces'));
+  $('#spaceDropdownMenu').setAttribute('aria-label', t('Espacios', 'Spaces'));
   $('#themeToggle').setAttribute('aria-label', t('Cambiar tema', 'Change theme'));
   $('#openSidebar').setAttribute('aria-label', t('Abrir navegación', 'Open navigation'));
   $('#closeSidebar').setAttribute('aria-label', t('Cerrar navegación', 'Close navigation'));
@@ -7962,6 +8008,11 @@ async function render(knownMe = null) {
   const me = knownMe || (await api('/api/auth/me'));
   state.user = me.user;
   state.csrf = me.csrfToken;
+  if (state.user?.preferredLanguage && state.config.languages.includes(state.user.preferredLanguage) && !localStorage.getItem('wiki-language')) {
+    state.lang = state.user.preferredLanguage;
+    await loadTranslations(state.lang);
+    renderLanguageMenu();
+  }
   setAuthLink();
   if (me.pendingTwoFactor) {
     history.replaceState({}, '', '/two-factor');
@@ -7977,10 +8028,16 @@ async function render(knownMe = null) {
     forcePassword();
     return;
   }
+  if (info.page === 'profile') {
+    if (!state.user) { location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search); return; }
+    showLoading();
+    try { await (await loadProfileModule()).profile(info.section, profileDependencies()); }
+    finally { hideLoading(); }
+    return;
+  }
   if (info.page === 'two-factor-setup') {
     if (!state.user) { location.href = '/login'; return; }
-    if (state.user.twoFactorEnabled) { location.href = '/'; return; }
-    await twoFactorSetup();
+    location.replace('/profile/security');
     return;
   }
   if (info.page === 'two-factor') {
@@ -7988,7 +8045,7 @@ async function render(knownMe = null) {
     return;
   }
   if (info.page === 'change-password') {
-    if (state.user) authForm('change');
+    if (state.user) location.replace('/profile/security');
     else authForm('login');
     return;
   }
@@ -8030,7 +8087,6 @@ async function render(knownMe = null) {
   }
   if (info.page === 'admin') {
     if (can('admin.view')) {
-      await loadWiki();
       state.adminTab = info.tab;
       await adminView(info.tab, { replaceUrl: true });
       return;
@@ -8133,8 +8189,10 @@ document.addEventListener('keydown', (event) => {
     $('#languageButton').focus();
   }
 });
+$('#themeToggle').innerHTML = '<svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16Zm0 1.5v13a6.5 6.5 0 1 1 0-13Z"/></svg>';
 $('#themeToggle').onclick = () => {
   document.body.classList.toggle('light');
+  document.documentElement.classList.toggle('theme-light', document.body.classList.contains('light'));
   localStorage.setItem('wiki-theme', document.body.classList.contains('light') ? 'light' : 'dark');
   syncBrowserThemeColor();
 };
@@ -8142,7 +8200,6 @@ $('#searchInput').oninput = (e) => {
   clearTimeout(searchDebounceTimer);
   const value = e.target.value;
   searchDebounceTimer = setTimeout(() => {
-    filterNav(value);
     renderSearchSuggestions(value);
   }, 140);
 };
@@ -8172,12 +8229,12 @@ $('#searchInput').onkeydown = (e) => {
 };
 $('#searchSuggestions').onclick = (event) => {
   const option = event.target.closest('.search-suggestion');
-  if (option) navigateToPage(option.dataset.slug);
+  if (option) { event.preventDefault(); navigateToPage(option.dataset.slug); }
 };
 document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
-    $('#searchInput').focus();
+    openArticleSearch();
   }
   if (e.key === 'Escape') {
     closeMobileNav();
@@ -8187,6 +8244,7 @@ document.addEventListener('keydown', (e) => {
   }
 });
 $('#openSidebar').onclick = () => {
+  $('#sidebar').inert = false;
   $('#sidebar').classList.add('open');
   $('#mobileShade').classList.add('open');
 };
@@ -8206,6 +8264,61 @@ window.addEventListener('beforeunload', (e) => {
     e.returnValue = '';
   }
 });
+
+function userAvatarMarkup(avatar, username = '') {
+  const valid = /^\/media\/(?:[A-Za-z0-9_-]{16}|[a-f0-9-]{36})\.(?:png|jpg|gif|webp)$/.test(avatar || '');
+  return valid ? '<img class="account-avatar" src="' + esc(avatar) + '" width="30" height="30" alt="">' : '<span class="account-initials" aria-hidden="true">' + esc(String(username).slice(0,2).toUpperCase()) + '</span>';
+}
+function renderPublicSidebar() {
+  const row = $('.brand-row'); row.className = 'brand-row wiki-brand-row'; row.replaceChildren();
+  const brand = $('#brand').cloneNode(true); brand.removeAttribute('id'); brand.className = 'brand wiki-sidebar-brand';
+  row.append(brand);
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'icon-button mobile-close'; close.id = 'closeSidebar'; close.setAttribute('aria-label', t('Cerrar navegación', 'Close navigation')); close.innerHTML = '<i class="fa-solid fa-xmark"></i>'; close.onclick = closeMobileNav; row.append(close);
+  syncPublicSidebarAccessibility();
+}
+function syncPublicSidebarAccessibility() {
+  const sidebar = $('#sidebar');
+  sidebar.inert = document.body.classList.contains('wiki-mode') && matchMedia('(max-width: 940px)').matches && !sidebar.classList.contains('open');
+}
+function renderArticleTags(tags = state.page?.tags || [], preview = false) {
+  let section = $('#articleTags');
+  if (!section) { section = document.createElement('section'); section.id = 'articleTags'; $('#lastEdited').before(section); }
+  section.innerHTML = '<h2><i class="fa-solid fa-tags" aria-hidden="true"></i> Tags</h2><div class="article-tag-list">' + tags.map(tag => '<button type="button" class="search-tag" data-article-tag="' + esc(tag) + '">' + esc(tag) + '</button>').join('') + '</div>';
+  section.hidden = tags.length === 0;
+  $$('[data-article-tag]',section).forEach(button => { if (preview) button.disabled = true; else button.onclick = () => openArticleSearch(button.dataset.articleTag); });
+}
+let searchRequest = 0, searchTag = '';
+function openArticleSearch(tag = '') {
+  searchTag = tag; const dialog = ensureArticleSearch(); if (!dialog.open) dialog.showModal();
+  $('#searchInput').value = ''; $('#searchInput').focus(); renderSearchSuggestions('');
+}
+function syncArticleSearchLabels() {
+  const dialog = $('#searchDialog'); if (!dialog) return;
+  const label = t('Buscar documentación', 'Search documentation');
+  dialog.setAttribute('aria-label', label);
+  $('#searchInput').placeholder = label;
+  $('.sr-only', dialog).textContent = label;
+  $('#searchTrigger span').textContent = t('Documentación', 'Documentation');
+  $('#closeArticleSearch').setAttribute('aria-label', t('Cerrar buscador', 'Close search'));
+}
+function ensureArticleSearch() {
+  let dialog = $('#searchDialog'); if (dialog) return dialog;
+  dialog = document.createElement('dialog'); dialog.id = 'searchDialog'; dialog.className = 'article-search-dialog'; dialog.setAttribute('aria-label',t('Buscar documentación','Search documentation'));
+  dialog.innerHTML = '<div class="article-search-header"><label class="sr-only" for="searchInput">' + t('Buscar documentación','Search documentation') + '</label><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><button type="button" class="icon-button" id="closeArticleSearch" aria-label="' + t('Cerrar buscador','Close search') + '">×</button></div><div id="searchFilters" class="search-filters" aria-label="Tags"></div>';
+  const input = $('#searchInput'), results = $('#searchSuggestions');
+  input.placeholder = t('Buscar documentación','Search documentation'); $('.article-search-header',dialog).insertBefore(input,$('#closeArticleSearch',dialog));
+  dialog.append(results); document.body.append(dialog);
+  $('#closeArticleSearch').onclick = () => dialog.close();
+  dialog.addEventListener('click',event => { if (event.target === dialog) { const box = dialog.getBoundingClientRect(); if(event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close(); } });
+  dialog.addEventListener('close',() => { searchRequest++; ($('#sidebar').inert ? $('#openSidebar') : $('#searchTrigger'))?.focus(); });
+  $('#searchFilters').onclick = event => { const button = event.target.closest('[data-search-tag]'); if (button) { searchTag = searchTag === button.dataset.searchTag ? '' : button.dataset.searchTag; renderSearchSuggestions(input.value); } };
+  const trigger = document.createElement('button'); trigger.id = 'searchTrigger'; trigger.className = 'article-search-trigger'; trigger.type = 'button'; trigger.innerHTML = '<i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><span>' + t('Documentación','Documentation') + '</span>'; trigger.onclick = () => openArticleSearch();
+  $('.search-box').append(trigger); return dialog;
+}
+window.addEventListener('resize', syncPublicSidebarAccessibility);
+ensureArticleSearch();
+$('#mobileDocsSearch').onclick = () => openArticleSearch();
+
 renderCookieNotice();
 showLoading();
 boot().finally(() => {

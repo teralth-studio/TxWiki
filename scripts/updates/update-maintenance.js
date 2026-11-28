@@ -64,7 +64,7 @@ function createUpdateMaintenance({ page, reopenDelay = 10000 }) {
     if (!state.active) return next();
     if (
       (req.method === 'GET' && req.path === '/api/updates/progress') ||
-      (['GET', 'HEAD'].includes(req.method) && ['/maintenance.js', '/maintenance.css'].includes(req.path))
+      (['GET', 'HEAD'].includes(req.method) && ['/maintenance.js', '/maintenance.css', '/buttons.css'].includes(req.path))
     )
       return next();
     return res

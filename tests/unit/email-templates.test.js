@@ -24,6 +24,7 @@ function helpers(overrides = {}) {
   const context = {
     fs, path, __dirname: root, Intl, Date, loginDetails,
     mailer: {},
+    backupTimeZone: 'America/Guayaquil',
     enqueueMail: async () => {},
     query: async () => [{ email: 'person@example.test', username: 'Alice' }],
     console: { warn() {}, error() {} },

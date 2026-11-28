@@ -19,21 +19,21 @@ const DEFAULT_THEME_FILES = new Map([
       author: 'Teralth Wiki',
       support: '',
       settings: [
-        { name: 'Primary Color', type: 'color', default: '#91a8ff' },
-        { name: 'Secondary Color', type: 'color', default: '#7188e8' },
+        { name: 'Primary Color', type: 'color', default: '#a3a3a3' },
+        { name: 'Secondary Color', type: 'color', default: '#e5e5e5' },
       ],
     }, null, 2)}\n`,
   ],
   [
     'theme.css',
     `body {
-  --accent: color-mix(in srgb, var(--theme-setting-primary-color, #91a8ff) 82%, #ffffff);
-  --accent-strong: color-mix(in srgb, var(--theme-setting-secondary-color, #7188e8) 82%, #ffffff);
+  --accent: color-mix(in srgb, var(--theme-setting-primary-color, #a3a3a3) 82%, #ffffff);
+  --accent-strong: color-mix(in srgb, var(--theme-setting-secondary-color, #e5e5e5) 82%, #ffffff);
 }
 
 body.light {
-  --accent: color-mix(in srgb, var(--theme-setting-primary-color, #91a8ff) 76%, #20232a);
-  --accent-strong: color-mix(in srgb, var(--theme-setting-secondary-color, #7188e8) 76%, #20232a);
+  --accent: color-mix(in srgb, var(--theme-setting-primary-color, #a3a3a3) 76%, #202020);
+  --accent-strong: color-mix(in srgb, var(--theme-setting-secondary-color, #e5e5e5) 76%, #202020);
 }
 `,
   ],

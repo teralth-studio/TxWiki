@@ -84,8 +84,9 @@ function safeFilePath(value) {
     value === 'launcher.js' ||
     value === 'schema.sqlite.sql' ||
     value === 'pterodactyl-start.js' ||
-    /^public\/(?:app|admin-updates|installer|maintenance)\.js$/.test(value) ||
-    /^public\/(?:styles|installer|maintenance)\.css$/.test(value) ||
+    /^public\/(?:app|admin-updates|installer|maintenance|oauth-complete|profile-ui|error-screen)\.js$/.test(value) ||
+    /^public\/(?:styles|installer|maintenance|errors|buttons)\.css$/.test(value) ||
+    /^public\/errors\/(?:[45]\d{2}\.html|README\.txt)$/.test(value) ||
     /^public\/(?:index|installer|maintenance)\.html$/.test(value) ||
     /^languages\/language_[A-Za-z0-9-]+\.json$/.test(value) ||
     /^scripts\/[A-Za-z0-9._/-]+\.js$/.test(value) ||
@@ -631,7 +632,14 @@ async function applyUpdatePackage({
           throw new UpdateError(`El identificador de migración ${migration.id} ya existe con otro contenido.`, 409);
         continue;
       }
-      await lockConnection.query(singleSqlStatement(migration.sql));
+      const statement = singleSqlStatement(migration.sql);
+      const addition = statement.match(/^ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+([A-Za-z_][A-Za-z0-9_]*)\s/i);
+      let columnExists = false;
+      if (addition) {
+        const [columns] = await lockConnection.query('SELECT TABLE_NAME,COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?', [addition[1], addition[2]]);
+        columnExists = columns.some(column => column.TABLE_NAME === addition[1] && column.COLUMN_NAME === addition[2]);
+      }
+      if (!columnExists) await lockConnection.query(statement);
       await lockConnection.execute(
         'INSERT INTO wiki_update_migrations (migration_id,update_id,sha256) VALUES (?,?,?)',
         [migration.id, pkg.id, migration.sha256],

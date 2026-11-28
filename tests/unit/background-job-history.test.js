@@ -53,3 +53,38 @@ test('signed update SQL migration creates the job history table on SQLite', asyn
     await pool.end();
   }
 });
+
+test('admin dashboard migration creates the visitor and trend tables on SQLite', async () => {
+  const pool = new SqlitePool(':memory:');
+  try {
+    for (const schemaFile of ['schema.sql', 'schema.sqlite.sql']) {
+      const schema = fs.readFileSync(path.join(__dirname, '..', '..', schemaFile), 'utf8');
+      assert.match(schema, /CREATE TABLE IF NOT EXISTS dashboard_visitors/);
+      assert.match(schema, /CREATE TABLE IF NOT EXISTS dashboard_stats/);
+      assert.match(schema, /visitor_hash/);
+      assert.match(schema, /happy_count/);
+    }
+    const migration = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'migrations', '20261127-admin-dashboard.sql'),
+      'utf8',
+    );
+    for (const statement of migration.split(';').map((part) => part.trim()).filter(Boolean))
+      await pool.query(statement);
+    await pool.query(
+      'INSERT OR IGNORE INTO dashboard_visitors (visit_day,visitor_hash) VALUES (?,?)',
+      ['2026-11-27', 'a'.repeat(64)],
+    );
+    await pool.query(
+      'INSERT OR IGNORE INTO dashboard_visitors (visit_day,visitor_hash) VALUES (?,?)',
+      ['2026-11-27', 'a'.repeat(64)],
+    );
+    const [visitors] = await pool.query('SELECT COUNT(*) AS total FROM dashboard_visitors');
+    assert.equal(visitors[0].total, 1);
+    const [tables] = await pool.query(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('dashboard_visitors','dashboard_stats') ORDER BY name",
+    );
+    assert.deepEqual(tables, [{ name: 'dashboard_stats' }, { name: 'dashboard_visitors' }]);
+  } finally {
+    await pool.end();
+  }
+});

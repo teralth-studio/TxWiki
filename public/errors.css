@@ -1,0 +1,27 @@
+
+@font-face { font-family: 'Roboto Mono'; src: url('/assets/fonts/roboto-mono-400.ttf') format('truetype'); font-style: normal; font-weight: 400; font-display: swap; }
+html:has(.tx-error-screen) { background: #000; color-scheme: dark; }
+body > .tx-error-screen, body > #pageErrorScreen.tx-error-screen, body > #fatalBox.tx-error-screen {
+ position: fixed; inset: 0; z-index: 100000; display: grid; place-items: center;
+ box-sizing: border-box; width: 100%; max-width: none; height: 100%; min-height: 100dvh;
+ margin: 0; padding: 36px 26px; border: 0; border-radius: 0; box-shadow: none; overflow: auto; background: #000; color: #fff;
+ font: 400 16px/1.5 'Roboto Mono', Consolas, monospace; color-scheme: dark;
+}
+.tx-error-screen *, .tx-error-screen *::before, .tx-error-screen *::after { box-sizing: border-box; }
+.tx-error-screen:focus { outline: none; }
+.tx-error-screen .copy-container { position: relative; width: fit-content; max-width: min(100%, 1100px); text-align: center; }
+.tx-error-screen .error-copy { margin: 0; padding: 0; color: #fff; font: inherit; font-size: clamp(18px, 2.4vw, 24px); letter-spacing: .2px; line-height: 1.65; overflow-wrap: anywhere; }
+.tx-error-screen .error-word { display: inline-block; max-width: 100%; }
+.tx-error-screen .error-char { visibility: hidden; }
+.tx-error-screen .error-char.is-visible { visibility: visible; }
+.tx-error-screen .handle { position: absolute; top: 0; left: 0; width: 14px; height: 30px; margin-top: 1px; background: #ffe500; pointer-events: none; animation: error-caret-blink .8s steps(1,end) 6; }
+.tx-error-screen .error-replay { position: fixed; right: max(15px, env(safe-area-inset-right)); bottom: max(15px, env(safe-area-inset-bottom)); display: grid; place-items: center; width: 44px; height: 44px; padding: 12px; border: 0; border-radius: 4px; background: transparent; color: #888; cursor: pointer; }
+.tx-error-screen .error-replay svg { width: 20px; height: 22px; fill: currentColor; }
+.tx-error-screen .error-replay:hover { color: #bbb; background: #141414; }
+.tx-error-screen .error-home { display: block; width: fit-content; margin: 22px auto 0; color: #aaa; font: inherit; font-size: 14px; text-decoration: none; }
+.tx-error-screen .error-home:hover { color: #fff; text-decoration: underline; }
+.tx-error-screen :is(.error-replay,.error-home):focus-visible { outline: 2px solid #ffe500; outline-offset: 4px; }
+.tx-error-screen .error-accessible-copy { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@keyframes error-caret-blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+@media(max-width:480px) { .tx-error-screen .handle { width: 11px; height: 25px; } }
+@media(prefers-reduced-motion:reduce) { .tx-error-screen .handle { animation: none; } }

@@ -154,7 +154,7 @@ test('updates admin status handles an empty update history and populated history
     auth() {},
     requirePermission: () => () => {},
     ensureUpdateTables: async () => {},
-    pool: { execute: async () => [[]] },
+    pool: { query: async (sql) => sql.includes('COUNT(*)') ? [[{ total: 0 }]] : [[]] },
     updatePublicKey: require('../../scripts/update-public-key'),
     systemVersion: () => '1.2.3',
     process: { env: {} },
@@ -168,14 +168,14 @@ test('updates admin status handles an empty update history and populated history
     set() { return this; },
     json(payload) { this.payload = payload; return this; },
   };
-  await handler({}, response, error => { throw error; });
+  await handler({ query: {} }, response, error => { throw error; });
   assert.equal(response.payload.configured, true);
   assert.equal(response.payload.currentVersion, '1.2.3');
   assert.deepEqual(Array.from(response.payload.updates), []);
 
   const updates = [{ update_id: 'release-1-2-4', release_version: '1.2.4', applied_at: '2026-11-08' }];
-  context.pool.execute = async () => [updates];
-  await handler({}, response, error => { throw error; });
+  context.pool.query = async sql => sql.includes('COUNT(*)') ? [[{ total: 1 }]] : [updates];
+  await handler({ query: {} }, response, error => { throw error; });
   assert.equal(response.payload.currentVersion, '1.2.4');
   assert.deepEqual(Array.from(response.payload.updates), updates);
 });
@@ -642,5 +642,25 @@ test('failed migrations restore files installed by the same update', async () =>
     );
     assert.equal(await fs.promises.readFile(target, 'utf8'), 'previous version');
     assert.ok(pool.calls.some(([owner, sql]) => owner === 'connection' && sql.includes('RELEASE_LOCK')));
+  });
+});
+
+test('column migrations work before and after automatic schema repair without losing page data', async () => {
+  const { SqlitePool } = require('../../scripts/database');
+  for (const repaired of [false, true]) await temporaryDirectory(async directory => {
+    const pool = new SqlitePool(path.join(directory, 'migration.sqlite'));
+    try {
+      await pool.query(`CREATE TABLE pages (id INTEGER PRIMARY KEY,content TEXT${repaired ? ',tags JSON NULL' : ''})`);
+      await pool.query("INSERT INTO pages(id,content) VALUES(1,'Keep this content')");
+      const sql = 'ALTER TABLE pages ADD COLUMN tags JSON NULL;';
+      await applyUpdatePackage({
+        pkg: { id: 'publication-update', version: '1.0.1', files: [], migrations: [{ id: 'add-tags', path: 'add-tags.sql', sha256: crypto.createHash('sha256').update(sql).digest('hex'), sql }] },
+        root: directory, pool, createBackup: async () => ({ name: 'test-backup' }), restart: async () => {}, installedVersion: '1.0.0',
+      });
+      const [[page]] = await pool.query('SELECT content,tags FROM pages WHERE id=1');
+      assert.equal(page.content, 'Keep this content'); assert.equal(page.tags, null);
+      const [[record]] = await pool.query("SELECT migration_id FROM wiki_update_migrations WHERE migration_id='add-tags'");
+      assert.equal(record.migration_id, 'add-tags');
+    } finally { await pool.end(); }
   });
 });
